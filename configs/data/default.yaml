@@ -1,0 +1,4 @@
+data_preprocessor:
+  _target_: tc_news_rec.data.preprocessor.DataProcessor
+  data_dir: ${hydra:runtime.cwd}/tcdata
+  output_dir: ${hydra:runtime.cwd}/user_data/processed

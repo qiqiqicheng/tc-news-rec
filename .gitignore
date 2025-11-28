@@ -2,6 +2,9 @@
 tcdata/
 user_data/
 
+# logs
+logs/
+
 # personal record
 record.md
 

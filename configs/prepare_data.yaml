@@ -1,0 +1,7 @@
+defaults:
+- data: default
+- hydra: default
+
+task_name: "prepare_data"
+
+tags: [ "dev" ]

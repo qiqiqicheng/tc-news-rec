@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+- _self_
+- data: default
+- model: default
+- hydra: default
+
+task_name: "train"
+
+tags: [ "dev" ]
+
+# passing arbitrary parameters
+foo: "bar"
