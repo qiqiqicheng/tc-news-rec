@@ -1,3 +1,10 @@
+.PHONY: data
+data: ## Download and preprocess the dataset
+	@echo "🚀 Preprocessing dataset"
+	@uv run python -m tc_news_rec.scripts.prepare_data
+
+# ================================
+# DEFAULT
 .PHONY: install
 install: ## Install the virtual environment and install the pre-commit hooks
 	@echo "🚀 Creating virtual environment using uv"

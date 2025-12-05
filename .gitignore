@@ -2,6 +2,10 @@
 tcdata/
 user_data/
 
+# idea
+.idea/
+.vscode/
+
 # logs
 logs/
 
@@ -219,3 +223,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+hydralance/

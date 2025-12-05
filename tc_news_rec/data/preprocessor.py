@@ -7,6 +7,7 @@ from tc_news_rec.utils.logger import RankedLogger
 
 log = RankedLogger(__name__)
 
+
 class DataProcessor:
     def __init__(self, data_dir: str, output_dir: str) -> None:
         self.data_dir = data_dir
@@ -72,19 +73,32 @@ class DataProcessor:
             + 1
         )
 
-        # Created at
-        articles_df["created_at_bucket"] = (
-            pd.qcut(
-                articles_df["created_at_ts"], q=100, labels=False, duplicates="drop"
-            )
-            + 1
+        num_time_buckets = 10000
+
+        # Combine all timestamps (created_at and click_time) to ensure consistent mapping
+        all_ts = pd.concat(
+            [
+                articles_df["created_at_ts"],
+                train_df["click_timestamp"],
+                test_df["click_timestamp"],
+            ]
         )
 
-        # Timestamp (in logs)
-        all_ts = pd.concat([train_df["click_timestamp"], test_df["click_timestamp"]])
-        ts_labels = pd.qcut(all_ts, q=100, labels=False, duplicates="drop") + 1
-        train_df["timestamp_bucket"] = ts_labels[: len(train_df)]
-        test_df["timestamp_bucket"] = ts_labels[len(train_df) :]
+        # Compute buckets on combined data
+        ts_labels = (
+            pd.qcut(all_ts, q=num_time_buckets, labels=False, duplicates="drop") + 1
+        )
+
+        # Split back and assign
+        len_articles = len(articles_df)
+        len_train = len(train_df)
+
+        # Use .values to avoid index alignment issues
+        articles_df["created_at_bucket"] = ts_labels[:len_articles].values
+        train_df["timestamp_bucket"] = ts_labels[
+            len_articles : len_articles + len_train
+        ].values
+        test_df["timestamp_bucket"] = ts_labels[len_articles + len_train :].values
 
         # Merge article features into logs
         log.info("Merging article features...")
@@ -104,12 +118,16 @@ class DataProcessor:
             article_feats, left_on="click_article_id", right_on="article_id", how="left"
         )
 
+        # Sort by click_timestamp (original) in ascending order
+        train_df = train_df.sort_values("click_timestamp", ascending=True)
+        test_df = test_df.sort_values("click_timestamp", ascending=True)
+
         # 3. Aggregation
         log.info("Aggregating sequences...")
 
         def aggregate_user_data(df, output_filename):
             # Sort by user and timestamp
-            df = df.sort_values(["user_id_mapped", "click_timestamp"])
+            df = df.sort_values(["user_id_mapped", "click_timestamp"], ascending=True)
 
             # Group by user
             grouped = df.groupby("user_id_mapped")
@@ -179,7 +197,25 @@ class DataProcessor:
         embs = articles_emb_df[emb_cols].values
 
         for i, art_id in enumerate(ids):
-            emb_dict[art_id] = torch.tensor(embs[i], dtype=torch.float32)
+            if art_id in item_map:
+                mapped_id = item_map[art_id]
+                emb_dict[mapped_id] = torch.tensor(embs[i], dtype=torch.float32)
 
         torch.save(emb_dict, os.path.join(self.output_dir, "article_embedding.pt"))
         log.info("Done.")
+
+    def processed_train_csv(self) -> str:
+        path = os.path.join(self.output_dir, "sasrec_format_by_user_train.csv")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Processed train CSV not found at {path}. Please run process() first."
+            )
+        return path
+
+    def processed_test_csv(self) -> str:
+        path = os.path.join(self.output_dir, "sasrec_format_by_user_test.csv")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Processed test CSV not found at {path}. Please run process() first."
+            )
+        return path
