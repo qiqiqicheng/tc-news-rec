@@ -40,7 +40,7 @@ class TCDataset(torch.utils.data.Dataset):
         padding_length: int,
         ignore_last_n: int,
         shift_id_by: int = 0,
-        chronological: bool = False,
+        chronological: bool = True,
         sample_ratio: float = 1.0,
         additional_columns: Optional[List[str]] = [],
     ):
@@ -50,7 +50,7 @@ class TCDataset(torch.utils.data.Dataset):
             padding_length (int): _description_
             ignore_last_n (int): number of last interactions to ignore (used for creating train/valid/test sets)
             shift_id_by (int, optional): _description_. Defaults to 0.
-            chronological (bool, optional): _description_. Defaults to False.
+            chronological (bool, optional): True for increase chronology. Defaults to True.
             sample_ratio (float, optional): _description_. Defaults to 1.0.
             additional_columns (Optional[List[str]], optional): _description_. Defaults to [].
         """
@@ -104,15 +104,15 @@ class TCDataset(torch.utils.data.Dataset):
         data = self.df.iloc[index]
         user_id = data["user_id_mapped"]
 
-        def eval_as_list(x: str, ignore_last_n: int) -> List[int]:
+        def eval_as_list(x, ignore_last_n: int) -> List[int]:
             y = eval(x)
             y_list = [y] if isinstance(y, int) else list(y)
             if ignore_last_n > 0:
-                y_list = y_list[:ignore_last_n]
+                y_list = y_list[:-ignore_last_n]
             return y_list
 
         def prepare_sequence_ids(
-            x: List[int],
+            x,
             ignore_last_n: int,
             shifted_by: int,
             sampling_kept_mask: Optional[List[bool]] = None,
@@ -163,13 +163,34 @@ class TCDataset(torch.utils.data.Dataset):
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
+        item_age_history, item_age_history_len = prepare_sequence_ids(
+            data["sequence_age"],
+            ignore_last_n=self._ignore_last_n,
+            shifted_by=0,
+            sampling_kept_mask=sampling_kept_mask,
+        )
+        item_hour_history, item_hour_history_len = prepare_sequence_ids(
+            data["sequence_hour_of_day"],
+            ignore_last_n=self._ignore_last_n,
+            shifted_by=0,
+            sampling_kept_mask=sampling_kept_mask,
+        )
+        item_day_history, item_day_history_len = prepare_sequence_ids(
+            data["sequence_day_of_week"],
+            ignore_last_n=self._ignore_last_n,
+            shifted_by=0,
+            sampling_kept_mask=sampling_kept_mask,
+        )
         assert (
             item_id_history_len
             == item_click_time_history_len
             == item_category_id_history_len
             == item_created_at_history_len
             == item_words_count_history_len
-        ), "Sequence lengths are not equal!"
+            == item_age_history_len
+            == item_hour_history_len
+            == item_day_history_len
+        ), "Sequence lengths are not equal!"  # NOTE: current is full interactive length
 
         def truncate_or_pad(
             y: List[int], target_len: int, chronological: bool = False
@@ -185,24 +206,30 @@ class TCDataset(torch.utils.data.Dataset):
             assert len(y) == target_len
             return y
 
-        historical_item_ids = item_id_history[1:]
-        historical_item_click_times = item_click_time_history[1:]
-        historical_item_category_ids = item_category_id_history[1:]
-        historical_item_created_ats = item_created_at_history[1:]
-        historical_item_words_counts = item_words_count_history[1:]
+        historical_item_ids = item_id_history[:-1]
+        historical_item_click_times = item_click_time_history[:-1]
+        historical_item_category_ids = item_category_id_history[:-1]
+        historical_item_created_ats = item_created_at_history[:-1]
+        historical_item_words_counts = item_words_count_history[:-1]
+        historical_item_ages = item_age_history[:-1]
+        historical_item_hours = item_hour_history[:-1]
+        historical_item_days = item_day_history[:-1]
 
-        target_item_id = item_id_history[0]
-        target_item_click_time = item_click_time_history[0]
+        target_item_id = item_id_history[-1]
+        target_item_click_time = item_click_time_history[-1]
 
-        if self._chronological:
+        if not self._chronological:  # raw data is chronological increasing
             historical_item_ids.reverse()
             historical_item_click_times.reverse()
             historical_item_category_ids.reverse()
             historical_item_created_ats.reverse()
             historical_item_words_counts.reverse()
+            historical_item_ages.reverse()
+            historical_item_hours.reverse()
+            historical_item_days.reverse()
 
         max_seq_len = self._padding_length - 1
-        history_len = min(item_id_history_len - 1, max_seq_len)
+        history_len = min(len(historical_item_ids), max_seq_len)
 
         historical_item_ids = truncate_or_pad(
             historical_item_ids,
@@ -229,6 +256,34 @@ class TCDataset(torch.utils.data.Dataset):
             target_len=max_seq_len,
             chronological=self._chronological,
         )
+        historical_item_ages = truncate_or_pad(
+            historical_item_ages,
+            target_len=max_seq_len,
+            chronological=self._chronological,
+        )
+        historical_item_hours = truncate_or_pad(
+            historical_item_hours,
+            target_len=max_seq_len,
+            chronological=self._chronological,
+        )
+        historical_item_days = truncate_or_pad(
+            historical_item_days,
+            target_len=max_seq_len,
+            chronological=self._chronological,
+        )
+
+        # Process user features
+        user_features = [
+            "environment",
+            "deviceGroup",
+            "os",
+            "country",
+            "region",
+            "referrer_type",
+        ]
+        user_feature_ids = {
+            feat: int(data[feat]) for feat in user_features if feat in data
+        }
 
         # Retrieve embeddings
         emb_dim = 250
@@ -267,6 +322,16 @@ class TCDataset(torch.utils.data.Dataset):
             "historical_item_words_counts": torch.tensor(
                 historical_item_words_counts, dtype=torch.int64
             ),
+            "historical_item_ages": torch.tensor(
+                historical_item_ages, dtype=torch.int64
+            ),
+            "historical_item_hours": torch.tensor(
+                historical_item_hours, dtype=torch.int64
+            ),
+            "historical_item_days": torch.tensor(
+                historical_item_days, dtype=torch.int64
+            ),
+            **user_feature_ids,
             "target_item_id": torch.tensor(target_item_id, dtype=torch.int64),
             "target_item_embedding": target_item_embedding,
             "target_item_click_time": torch.tensor(
@@ -274,6 +339,9 @@ class TCDataset(torch.utils.data.Dataset):
             ),
             "history_len": torch.tensor(history_len, dtype=torch.int64),
         }
+        import pdb
+
+        pdb.set_trace()
 
         for column in self._additional_columns:  # type: ignore
             sample_dict[column] = torch.tensor(data[column], dtype=torch.int64)
@@ -294,6 +362,8 @@ class TCDataModule(L.LightningDataModule):
         batch_size: int = 32,
         num_workers: int = os.cpu_count() // 4,  # type: ignore
         prefetch_factor: int = 4,
+        random_split: bool = False,
+        split_ratios: List[float] = [0.8, 0.1, 0.1],
     ) -> None:
         super().__init__()
         self.__dict__.update(locals())
@@ -306,23 +376,41 @@ class TCDataModule(L.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
+        self.random_split = random_split
+        self.split_ratios = split_ratios
         self.data_preprocessor = (
             hydra.utils.instantiate(data_preprocessor)
             if isinstance(data_preprocessor, DictConfig)
             else data_preprocessor
         )
 
-    def instantiate_dataset(self, dataset: TCDataset | DictConfig) -> TCDataset:
+    def instantiate_dataset(
+        self,
+        dataset: TCDataset | DictConfig,
+        file: Optional[pd.DataFrame] = None,
+        ignore_last_n: Optional[int] = None,
+    ) -> TCDataset:
         if isinstance(dataset, DictConfig):
             kwargs = {}
             if "padding_length" not in dataset:
                 kwargs["padding_length"] = self.max_seq_length + 1
+            else:
+                assert dataset.padding_length == self.max_seq_length + 1, (
+                    "Dataset padding_length must be max_seq_length + 1"
+                )
             if "chronological" not in dataset:
                 kwargs["chronological"] = self.chronological
             if "sample_ratio" not in dataset:
                 kwargs["sample_ratio"] = self.sampling_ratio
             if "file" not in dataset or "embedding_file" not in dataset:
                 raise ValueError("Dataset config must contain 'file' key.")
+
+            if file is not None:
+                kwargs["file"] = file
+
+            if ignore_last_n is not None:
+                kwargs["ignore_last_n"] = ignore_last_n
+
             log.info(
                 f"Instantiating instance <{dataset._target_}> with extra {pformat(kwargs)} on file"
             )
@@ -331,11 +419,48 @@ class TCDataModule(L.LightningDataModule):
             return dataset
 
     def setup(self, stage: Optional[str] = None) -> None:
-        if stage == "fit" or stage is None:
-            self.train_dataset = self.instantiate_dataset(self.train_dataset)
-            self.val_dataset = self.instantiate_dataset(self.val_dataset)
-        if stage == "test" or stage is None:
-            self.test_dataset = self.instantiate_dataset(self.test_dataset)
+        if self.random_split:
+            log.info("Using random split strategy for datasets.")
+            # Load full data from train_dataset config
+            if isinstance(self.train_dataset, DictConfig):
+                file_path = self.train_dataset.file
+                full_df = load_data(file_path)
+
+                # Shuffle and split
+                full_df = full_df.sample(frac=1).reset_index(drop=True)
+                n = len(full_df)
+                train_len = int(n * self.split_ratios[0])
+                val_len = int(n * self.split_ratios[1])
+
+                train_df = full_df.iloc[:train_len]
+                val_df = full_df.iloc[train_len : train_len + val_len]
+                test_df = full_df.iloc[train_len + val_len :]
+
+                log.info(
+                    f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}"
+                )
+
+                if stage == "fit" or stage is None:
+                    self.train_dataset = self.instantiate_dataset(
+                        self.train_dataset, file=train_df, ignore_last_n=0
+                    )
+                    self.val_dataset = self.instantiate_dataset(
+                        self.train_dataset, file=val_df, ignore_last_n=0
+                    )
+                if stage == "test" or stage is None:
+                    self.test_dataset = self.instantiate_dataset(
+                        self.train_dataset, file=test_df, ignore_last_n=0
+                    )
+            else:
+                raise ValueError(
+                    "train_dataset must be a DictConfig when using random_split."
+                )
+        else:
+            if stage == "fit" or stage is None:
+                self.train_dataset = self.instantiate_dataset(self.train_dataset)
+                self.val_dataset = self.instantiate_dataset(self.val_dataset)
+            if stage == "test" or stage is None:
+                self.test_dataset = self.instantiate_dataset(self.test_dataset)
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(

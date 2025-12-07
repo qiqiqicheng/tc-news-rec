@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import torch
 import os
+import json
+import pdb
 
 from tc_news_rec.utils.logger import RankedLogger
 
@@ -31,7 +33,13 @@ class DataProcessor:
 
         # Article ID (Item ID)
         all_articles = articles_df["article_id"].unique()
-        item_map = {i: k + 1 for k, i in enumerate(sorted(all_articles))}
+        item_map = {int(i): k + 1 for k, i in enumerate(sorted(all_articles))}
+        reverse_item_map = {
+            v: k for k, v in item_map.items()
+        }  # save as json for downstream
+        with open(os.path.join(self.output_dir, "item_id_mapping.json"), "w") as f:
+            json.dump(reverse_item_map, f, indent=4)
+        log.info("Item ID mapping saved.")
 
         # Category ID
         all_cats = articles_df["category_id"].unique()
@@ -108,6 +116,7 @@ class DataProcessor:
                 "category_id_mapped",
                 "created_at_bucket",
                 "words_count_bucket",
+                "created_at_ts",  # Keep original ts for age calculation
             ]
         ]
 
@@ -121,6 +130,32 @@ class DataProcessor:
         # Sort by click_timestamp (original) in ascending order
         train_df = train_df.sort_values("click_timestamp", ascending=True)
         test_df = test_df.sort_values("click_timestamp", ascending=True)
+
+        def calculate_time_features(df):
+            # Age: click_timestamp - created_at_ts
+            df["age"] = df["click_timestamp"] - df["created_at_ts"]
+            # Handle potential negative age (if click happens before creation due to logging issues)
+            df["age"] = df["age"].apply(lambda x: max(0, x))
+
+            # Convert click_timestamp to datetime for extraction
+            # Assuming timestamp is in milliseconds
+            dt_series = pd.to_datetime(df["click_timestamp"], unit="ms")
+
+            # dt_series is a Series, so .dt accessor works
+            df["hour_of_day"] = dt_series.dt.hour + 1  # 1-24
+            df["day_of_week"] = dt_series.dt.dayofweek + 1  # 1-7
+
+            return df
+
+        train_df = calculate_time_features(train_df)
+        test_df = calculate_time_features(test_df)
+
+        # Discretize Age
+        # Combine age for consistent bucketing
+        all_age = pd.concat([train_df["age"], test_df["age"]])
+        age_labels = pd.qcut(all_age, q=100, labels=False, duplicates="drop") + 1
+        train_df["age_bucket"] = age_labels[: len(train_df)]
+        test_df["age_bucket"] = age_labels[len(train_df) :]
 
         # 3. Aggregation
         log.info("Aggregating sequences...")
@@ -140,6 +175,9 @@ class DataProcessor:
                 "category_id_mapped": lambda x: ",".join(map(str, x)),
                 "created_at_bucket": lambda x: ",".join(map(str, x)),
                 "words_count_bucket": lambda x: ",".join(map(str, x)),
+                "age_bucket": lambda x: ",".join(map(str, x)),
+                "hour_of_day": lambda x: ",".join(map(str, x)),
+                "day_of_week": lambda x: ",".join(map(str, x)),
                 "click_environment": lambda x: (
                     x.mode()[0] if not x.mode().empty else x.iloc[0]
                 ),
@@ -202,6 +240,37 @@ class DataProcessor:
                 emb_dict[mapped_id] = torch.tensor(embs[i], dtype=torch.float32)
 
         torch.save(emb_dict, os.path.join(self.output_dir, "article_embedding.pt"))
+
+        # 5. Save feature statistics
+        log.info("Saving feature statistics...")
+        feature_max_values = {
+            # "user_id": len(user_map),
+            "item_id": len(item_map),
+            "category_id": len(category_map),
+            "words_count": int(articles_df["words_count_bucket"].max()),
+            "created_at": int(articles_df["created_at_bucket"].max()),
+            "age": int(max(train_df["age_bucket"].max(), test_df["age_bucket"].max())),
+            "hour_of_day": 24,
+            "day_of_week": 7,
+        }
+
+        # Map original col name to final feature name
+        col_name_map = {
+            "click_environment": "environment",
+            "click_deviceGroup": "deviceGroup",
+            "click_os": "os",
+            "click_country": "country",
+            "click_region": "region",
+            "click_referrer_type": "referrer_type",
+        }
+
+        for col, final_name in col_name_map.items():
+            feature_max_values[final_name] = len(cat_maps[col])
+
+        with open(os.path.join(self.output_dir, "feature_counts.json"), "w") as f:
+            json.dump(feature_max_values, f, indent=4)
+        log.info("Feature statistics saved.")
+
         log.info("Done.")
 
     def processed_train_csv(self) -> str:

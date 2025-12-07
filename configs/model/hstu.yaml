@@ -1,0 +1,78 @@
+_target_: tc_news_rec.models.models.RetrivalModel
+
+k: 5
+
+optimizer:
+  _target_: torch.optim.SGD
+  _partial_: true
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ConstantLR
+  _partial_: true
+
+configure_optimizer_params:
+  monitor: val/hr@5
+  interval: epoch
+  frequency: 1
+
+gr_output_length: 1
+item_embedding_dim: 64
+
+preprocessor:
+  _target_: tc_news_rec.models.preprocessors.preprocessors.AllEmbeddingsInputPreprocessor
+  embedding_module: 
+    _target_: tc_news_rec.models.embeddings.embeddings.LocalEmbeddingModule
+    emb_dim: ${model.item_embedding_dim}
+    # NOTE: num_item is passed inside
+  feature_counts: $(hydra:runtime.cwd)/user_data/processed/feature_counts.json
+  max_seq_len: ${eval:${data.max_seq_length} + ${model.gr_output_length} + 1}
+  dropout_rate: 0.2
+
+sequence_encoder:
+  _target_: tc_news_rec.models.sequential_encoders.hstu.HSTU
+  max_sequence_len: ${data.max_seq_length}
+  max_output_len: ${eval:${model.gr_output_length} + 1}
+  embedding_dim: ${model.item_embedding_dim}
+  item_embedding_dim: ${model.item_embedding_dim}
+  num_blocks: 2
+  num_heads: 1
+  attention_dim: ${model.item_embedding_dim}
+  linear_dim: ${model.item_embedding_dim}
+  linear_dropout_rate: 0.2
+  attn_dropout_rate: 0.0
+  normalization: rel_bias
+  linear_config: uvqk
+  linear_activation: silu
+  concat_ua: false
+  enable_relative_attention_bias: true
+
+postprocessor:
+  _target_: tc_news_rec.models.postprocessors.postprocessors.L2NormEmbeddingPostprocessor
+  embedding_dim: ${model.item_embedding_dim}
+  eps: 1e-6
+
+similarity:
+  _target_: tc_news_rec.models.similarity.similarity.DotProductSimilarity
+
+negatives_sampler:
+  _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
+  l2_normalize: true
+
+candidate_index:
+  _target_: tc_news_rec.models.indexing.candidate_index.CandidateIndex
+  # NOTE: ids is set inside
+  top_k_module:
+    _target_: tc_news_rec.models.indexing.top_k.MIPSBruteTopK
+
+loss:
+  _target_: tc_news_rec.models.losses.losses.SampledSoftmaxLoss
+  num_to_sample: 128
+  softmax_temperature: 0.05
+
+metrics:
+  _target_: tc_news_rec.models.metrics.retrieval_metrics.RetrievalMetrics
+  k: ${model.k}
+  at_k_list: [10, 50, 100, 200]
+
+# compile model for faster training with pytorch 2.0
+compile_model: true
