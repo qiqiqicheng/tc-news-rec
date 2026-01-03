@@ -3,6 +3,7 @@ import abc
 import torch
 import torch.nn.functional as F
 
+
 class OutputPostprocessorModule(torch.nn.Module):
     @abc.abstractmethod
     def debug_str(self) -> str:
@@ -33,6 +34,8 @@ class L2NormEmbeddingPostprocessor(OutputPostprocessorModule):
         self,
         output_embeddings: torch.Tensor,
     ) -> torch.Tensor:
+        if isinstance(output_embeddings, tuple):
+            output_embeddings = output_embeddings[0]
         output_embeddings = output_embeddings[..., : self._embedding_dim]
         return output_embeddings / torch.clamp(
             torch.linalg.norm(output_embeddings, ord=None, dim=-1, keepdim=True),

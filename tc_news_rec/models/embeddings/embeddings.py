@@ -10,6 +10,10 @@ class EmbeddingModule(torch.nn.Module, abc.ABC):
     def __init__(self) -> None:
         super().__init__()
 
+    def forward(self, item_ids: torch.Tensor) -> torch.Tensor:
+        return self.get_item_embeddings(item_ids)
+        
+    
     @abc.abstractmethod
     def get_item_embeddings(self, item_ids: torch.Tensor) -> torch.Tensor:
         pass

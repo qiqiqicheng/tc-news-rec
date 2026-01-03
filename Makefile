@@ -23,7 +23,7 @@ check: ## Run code quality tools.
 .PHONY: test
 test: ## Test the code with pytest
 	@echo "🚀 Testing code: Running pytest"
-	@uv run python -m pytest --doctest-modules
+	@uv run python -m pytest -s --doctest-modules
 
 .PHONY: build
 build: clean-build ## Build wheel file

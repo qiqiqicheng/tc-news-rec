@@ -62,7 +62,7 @@ def get_sequential_features(
     for key, new_key in user_keys_map.items():
         payloads[new_key] = batch[key].to(device)
     
-    target_ids = batch["target_item_id"].to(device).unsqueeze(1)  # [B,]
+    target_ids = batch["target_item_id"].to(device).unsqueeze(1)  # [B, 1]
 
     seq_features = SequentialFeatures(
         past_lens=past_lens,

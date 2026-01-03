@@ -183,6 +183,7 @@ def _hstu_attention_maybe_from_cache(
             values=k, offsets=x_offsets, max_lengths=n, padding_value=0.0
         )
 
+    # TODO: understand esinsum, num_heads and why using F.silu instand of F.softmax
     qk_attn = torch.einsum(
         "bnhd,bmhd->bhnm",
         padded_q.view(B, n, num_heads, attention_dim),
@@ -234,6 +235,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         )
         self._normalization: str = normalization
         self._linear_config: str = linear_config
+        # understand the dimension setting, especially for num_heads
         if self._linear_config == "uvqk":
             self._uvqk = torch.nn.Parameter(
                 torch.empty(
@@ -255,6 +257,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         torch.nn.init.xavier_uniform_(self._o.weight)
         self._eps: float = epsilon
 
+    # TODO: understand the dimension setting and the meaning of pre-norm and post-norm
     def _norm_input(self, x: torch.Tensor) -> torch.Tensor:
         return F.layer_norm(x, normalized_shape=[self._embedding_dim], eps=self._eps)
 
@@ -293,6 +296,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         if delta_x_offsets is not None:
             # In this case, for all the following code, x, u, v, q, k become restricted to
             # [delta_x_offsets[0], :].
+            # TODO: understand how delta_x_offsets is compiled
             assert cache is not None
             x = x[delta_x_offsets[0], :]
             cached_v, cached_q, cached_k, cached_outputs = cache
@@ -305,6 +309,10 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
                 batched_mm_output = F.silu(batched_mm_output)
             elif self._linear_activation == "none":
                 batched_mm_output = batched_mm_output
+            else:
+                raise ValueError(
+                    f"Unknown self._linear_activation {self._linear_activation}"
+                )
             u, v, q, k = torch.split(
                 batched_mm_output,
                 [
@@ -417,6 +425,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
                 dim=0, index=delta_x_offsets[0], source=new_outputs
             )
 
+        # TODO: understand why we need this restriction
         if return_cache_states and delta_x_offsets is None:
             v = v.contiguous()
 
@@ -659,11 +668,12 @@ class HSTU(torch.nn.Module):
         user_embeddings, cached_states = self._hstu(
             x=user_embeddings,
             x_offsets=ops.asynchronous_complete_cumsum(past_lengths),
-            all_timestamps=(
-                past_payloads[TIMESTAMPS_KEY]
-                if TIMESTAMPS_KEY in past_payloads
-                else None
-            ),
+            # all_timestamps=(
+            #     past_payloads[TIMESTAMPS_KEY]
+            #     if TIMESTAMPS_KEY in past_payloads
+            #     else None
+            # ),
+            all_timestamps=None,
             invalid_attn_mask=1.0 - self._attn_mask.to(float_dtype),
             delta_x_offsets=delta_x_offsets,
             cache=cache,

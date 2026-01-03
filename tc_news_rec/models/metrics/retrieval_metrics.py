@@ -1,6 +1,7 @@
 """
 Copied from https://github.com/foreverYoungGitHub/generative-recommenders-pl
 """
+
 import torch
 import torchmetrics
 import torchmetrics.utilities
@@ -67,5 +68,10 @@ class RetrievalMetrics(torchmetrics.Metric):
         for at_k in self.at_k_list:
             output[f"hr@{at_k}"] = (ranks <= at_k).to(torch.float32).mean()
         # compute mrr
-        output["mrr"] = (1.0 / ranks).mean()
+        # If rank is > k (meaning not found in top k), reciprocal rank should be 0
+        output["mrr"] = torch.where(
+            ranks <= self.k,
+            1.0 / ranks,
+            torch.zeros(1, dtype=torch.float32, device=ranks.device),
+        ).mean()
         return output

@@ -227,19 +227,31 @@ class DataProcessor:
 
         # 4. Embeddings
         log.info("Processing embeddings...")
-        emb_dict = {}
-        ids = articles_emb_df["article_id"].values
-        emb_cols = [c for c in articles_emb_df.columns if c.startswith("emb_")]
-        # Sort columns to ensure order emb_0, emb_1, ...
-        emb_cols.sort(key=lambda x: int(x.split("_")[1]))
-        embs = articles_emb_df[emb_cols].values
+        num_items = len(item_map) + 1  # +1 for padding idx 0
+        emb_dim = 250
+        embedding_mat = torch.zeros((num_items, emb_dim), dtype=torch.float32)
+        for _, row in articles_emb_df.iterrows():
+            original_id = int(row["article_id"])
+            if original_id in item_map:
+                mapped_id = item_map[original_id]
+                emb_values = row[1:].values.astype(np.float32)
+                embedding_mat[mapped_id] = torch.tensor(emb_values, dtype=torch.float32)
+                
+        torch.save(embedding_mat, os.path.join(self.output_dir, "article_embedding.pt"))
+        
+        # emb_dict = {}
+        # ids = articles_emb_df["article_id"].values
+        # emb_cols = [c for c in articles_emb_df.columns if c.startswith("emb_")]
+        # # Sort columns to ensure order emb_0, emb_1, ...
+        # emb_cols.sort(key=lambda x: int(x.split("_")[1]))
+        # embs = articles_emb_df[emb_cols].values
 
-        for i, art_id in enumerate(ids):
-            if art_id in item_map:
-                mapped_id = item_map[art_id]
-                emb_dict[mapped_id] = torch.tensor(embs[i], dtype=torch.float32)
+        # for i, art_id in enumerate(ids):
+        #     if art_id in item_map:
+        #         mapped_id = item_map[art_id]
+        #         emb_dict[mapped_id] = torch.tensor(embs[i], dtype=torch.float32)
 
-        torch.save(emb_dict, os.path.join(self.output_dir, "article_embedding.pt"))
+        # torch.save(emb_dict, os.path.join(self.output_dir, "article_embedding.pt"))
 
         # 5. Save feature statistics
         log.info("Saving feature statistics...")

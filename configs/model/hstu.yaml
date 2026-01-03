@@ -1,4 +1,8 @@
-_target_: tc_news_rec.models.models.RetrivalModel
+_target_: tc_news_rec.models.models.RetreivalModel
+
+# defaults:
+#   - /data: default
+#   - _self_
 
 k: 5
 
@@ -18,13 +22,25 @@ configure_optimizer_params:
 gr_output_length: 1
 item_embedding_dim: 64
 
+# datamodule:
+#   _target_: ${data._target_}
+#   data_preprocessor: ${data.data_preprocessor}
+#   train_dataset: ${data.train_dataset}
+#   val_dataset: ${data.val_dataset}
+#   test_dataset: ${data.test_dataset}
+#   max_seq_length: ${data.max_seq_length}
+#   chronological: ${data.chronological}
+#   sampling_ratio: ${data.sampling_ratio}
+#   batch_size: ${data.batch_size}
+
 preprocessor:
   _target_: tc_news_rec.models.preprocessors.preprocessors.AllEmbeddingsInputPreprocessor
-  embedding_module: 
+  embedding_module:
     _target_: tc_news_rec.models.embeddings.embeddings.LocalEmbeddingModule
     emb_dim: ${model.item_embedding_dim}
+    num_items: ???
     # NOTE: num_item is passed inside
-  feature_counts: $(hydra:runtime.cwd)/user_data/processed/feature_counts.json
+  feature_counts: ${hydra:runtime.cwd}/user_data/processed/feature_counts.json
   max_seq_len: ${eval:${data.max_seq_length} + ${model.gr_output_length} + 1}
   dropout_rate: 0.2
 
@@ -54,7 +70,7 @@ postprocessor:
 similarity:
   _target_: tc_news_rec.models.similarity.similarity.DotProductSimilarity
 
-negatives_sampler:
+negative_sampler:
   _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
   l2_normalize: true
 
@@ -72,7 +88,7 @@ loss:
 metrics:
   _target_: tc_news_rec.models.metrics.retrieval_metrics.RetrievalMetrics
   k: ${model.k}
-  at_k_list: [10, 50, 100, 200]
+  at_k_list: [ 1, 5 ]
 
 # compile model for faster training with pytorch 2.0
 compile_model: true

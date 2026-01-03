@@ -1,0 +1,27 @@
+# @package _global_
+
+task_name: "debug"
+
+callbacks: null
+logger: null
+
+hydra:
+  job_logging:
+    root:
+      level: DEBUG
+
+trainer:
+  max_epochs: 1
+  accelerator: cpu
+  devices: 1
+  detect_anomaly: true
+  limit_train_batches: 2
+  limit_val_batches: 2
+  limit_test_batches: 2
+  
+# data:
+#   num_workers: 0
+#   pin_memory: false
+
+model:
+  compile_model: false

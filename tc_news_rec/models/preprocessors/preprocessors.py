@@ -74,6 +74,7 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
                 feature_counts = json.load(f)
 
         self._feature_counts = feature_counts
+        # print(f"Feature counts loaded: {self._feature_counts}")
         self._dropout = torch.nn.Dropout(dropout_rate)
         self._position_embeddings = torch.nn.Embedding(max_seq_len, emb_dim)
 

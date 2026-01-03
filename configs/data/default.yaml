@@ -3,26 +3,14 @@ max_seq_length: 50
 batch_size: 32
 chronological: true
 sampling_ratio: 1.0
+random_split: true
+split_ratios: [ 0.8, 0.1, 0.1 ]
 
 data_preprocessor:
   _target_: tc_news_rec.data.preprocessor.DataProcessor
   data_dir: ${hydra:runtime.cwd}/tcdata
   output_dir: ${hydra:runtime.cwd}/user_data/processed
 
-train_dataset:
-  _target_: tc_news_rec.data.tc_dataset.TCDataset
-  file: ${hydra:runtime.cwd}/user_data/processed/sasrec_format_by_user_train.csv
-  embedding_file: ${hydra:runtime.cwd}/user_data/processed/article_embedding.pt
-  ignore_last_n: 1
-
-val_dataset:
-  _target_: tc_news_rec.data.tc_dataset.TCDataset
-  file: ${hydra:runtime.cwd}/user_data/processed/sasrec_format_by_user_train.csv
-  embedding_file: ${hydra:runtime.cwd}/user_data/processed/article_embedding.pt
-  ignore_last_n: 0
-
-test_dataset:
-  _target_: tc_news_rec.data.tc_dataset.TCDataset
-  file: ${hydra:runtime.cwd}/user_data/processed/sasrec_format_by_user_test.csv
-  embedding_file: ${hydra:runtime.cwd}/user_data/processed/article_embedding.pt
-  ignore_last_n: 0
+train_file: ${hydra:runtime.cwd}/user_data/processed/sasrec_format_by_user_train.csv
+test_file: ${hydra:runtime.cwd}/user_data/processed/sasrec_format_by_user_test.csv
+embedding_file: ${hydra:runtime.cwd}/user_data/processed/article_embedding.pt

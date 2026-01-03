@@ -49,7 +49,7 @@ class BaseRecommender(L.LightningModule):
         postprocessor: OutputPostprocessorModule | DictConfig,
         similarity: NDPModule | DictConfig,
         negative_sampler: NegativeSampler | DictConfig,
-        condidate_index: CandidateIndex | DictConfig,
+        candidate_index: CandidateIndex | DictConfig,
         loss: AutoregressiveLoss | DictConfig,
         metrics: torchmetrics.Metric | DictConfig,
         optimizer: torch.optim.Optimizer | DictConfig,
@@ -60,7 +60,7 @@ class BaseRecommender(L.LightningModule):
         compile_model: bool,
     ) -> None:
         super().__init__()
-        
+
         self.k = k
 
         self.optimizer: torch.optim.Optimizer = (
@@ -88,10 +88,10 @@ class BaseRecommender(L.LightningModule):
             similarity,
             negative_sampler,
             loss,
-            condidate_index,
+            candidate_index,
             metrics,
         )
-        
+
     def _hydra_init_modules(
         self,
         datamodule: TCDataModule | DictConfig,
@@ -106,7 +106,7 @@ class BaseRecommender(L.LightningModule):
     ) -> None:
         # TODO: check it carefully later
         self.datamodule: TCDataModule = (
-            hydra.utils.instantiate(datamodule)
+            hydra.utils.instantiate(datamodule, _recursive_=False)
             if isinstance(datamodule, DictConfig)
             else datamodule
         )
@@ -148,13 +148,14 @@ class BaseRecommender(L.LightningModule):
         )
 
         if isinstance(candidate_index, DictConfig):
-            all_ids = torch.Tensor(self.preprocessor.get_all_item_ids()).view(1, -1).long()
-            self.candidate_index = chydra.utils.instantiate(
+            all_ids = (
+                torch.Tensor(self.preprocessor.get_all_item_ids()).view(1, -1).long()
+            )
+            self.candidate_index = hydra.utils.instantiate(
                 candidate_index, ids=all_ids, _recursive_=False
             )
         else:
             raise ValueError("candidate_index must be a DictConfig")
-            
 
         self.metrics: torchmetrics.Metric = (
             hydra.utils.instantiate(metrics, _recursive_=False)
@@ -305,7 +306,7 @@ class BaseRecommender(L.LightningModule):
         return output
 
 
-class RetrivalModel(BaseRecommender):
+class RetreivalModel(BaseRecommender):
     def forward(
         self, seq_features: SequentialFeatures
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -325,15 +326,17 @@ class RetrivalModel(BaseRecommender):
             past_ids=seq_features.past_ids,
             past_payloads=seq_features.past_payloads,
         )
-        encoded_embeddings, cached_states = self.encoder(  # type: ignore
-            past_lens=past_lens,
-            seq_embeddings=seq_embeddings,
+        # import pdb; pdb.set_trace()
+        encoded_embeddings, cached_states = self.sequence_encoder(
+            past_lengths=past_lens,
+            user_embeddings=seq_embeddings,
             valid_mask=valid_mask,
-            aux_mask=aux_mask,
+            past_payloads=seq_features.past_payloads,
         )
+        # pdb.set_trace()
 
         if aux_mask is not None:
-            encoded_embeddings = ops.mask_dense_by_aux_mask(
+            encoded_embeddings, _ = ops.mask_dense_by_aux_mask(
                 encoded_embeddings,
                 aux_mask,
                 past_lens,
@@ -342,6 +345,14 @@ class RetrivalModel(BaseRecommender):
 
         encoded_embeddings = self.postprocessor(encoded_embeddings)
         return encoded_embeddings, cached_states
+
+    def _update_candidate_embeddings(self) -> None:
+        item_emb_module = self.preprocessor.get_item_id_embedding_module()
+        embeddings = item_emb_module.weight[1:].unsqueeze(0)  # [1, N, D]
+
+        self.candidate_index.update_embeddings(
+            self.negative_sampler.normalize_embeddings(embeddings)
+        )
 
     @torch.inference_mode()
     def retrieve(
@@ -369,13 +380,7 @@ class RetrivalModel(BaseRecommender):
             log.info(
                 "Initializing candidate index embeddings with current item embeddings"
             )
-            self.candidate_index.update_embeddings(
-                self.negative_sampler.normalize_embeddings(
-                    self.preprocessor.get_embedding_by_id(
-                        self.candidate_index.ids
-                    )  # [1, X, D]
-                )
-            )
+            self._update_candidate_embeddings()
 
         top_k_ids, top_k_scores = self.candidate_index.get_top_k_outputs(
             query_embeddings=current_embeddings,
@@ -406,15 +411,12 @@ class RetrivalModel(BaseRecommender):
                 valid_mask=(in_batch_ids != 0).unsqueeze(-1).float(),
                 embeddings=self.preprocessor.get_embedding_by_id(in_batch_ids),
             )
-            pass
         elif isinstance(self.negative_sampler, GlobalNegativeSampler):
             # TODO: find a better way to set item embedding
             self.negative_sampler.set_item_embedding(
                 self.preprocessor.get_item_id_embedding_module()
             )
-            self.negative_sampler.set_all_item_ids(
-                self.preprocessor.get_all_item_ids()
-            )
+            self.negative_sampler.set_all_item_ids(self.preprocessor.get_all_item_ids())
 
         all_ids = seq_features.past_ids
 
@@ -442,22 +444,18 @@ class RetrivalModel(BaseRecommender):
     def on_validation_epoch_start(self) -> None:
         """Lightning calls this at the beginning of the validation epoch."""
         self.metrics.reset()
-        self.candidate_index.update_embeddings(
-            self.negative_sampler.normalize_embeddings(
-                self.preprocessor.get_embedding_by_id(self.candidate_index.ids)
-            )
-        )
+        self._update_candidate_embeddings()
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
-        seq_feature, traget_ids = get_sequential_features(
+        seq_features, target_ids = get_sequential_features(
             batch, device=self.device, max_output_length=self.gr_output_length + 1
         )
 
         top_k_ids, top_k_scores = self.retrieve(
-            seq_features=seq_feature, k=self.k, filter_past_ids=True
+            seq_features=seq_features, k=self.k, filter_past_ids=True
         )
 
-        self.metrics.update(top_k_ids=top_k_ids, target=traget_ids)
+        self.metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
 
     def on_validation_epoch_end(self) -> None:
         """
@@ -476,11 +474,7 @@ class RetrivalModel(BaseRecommender):
     def on_test_epoch_start(self) -> None:
         """Lightning calls this at the beginning of the test epoch."""
         self.metrics.reset()
-        self.candidate_index.update_embeddings(
-            self.negative_sampler.normalize_embeddings(
-                self.preprocessor.get_embedding_by_id(self.candidate_index.ids)
-            )
-        )
+        self._update_candidate_embeddings()
 
     def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> None:
         self.validation_step(batch, batch_idx)
@@ -501,11 +495,7 @@ class RetrivalModel(BaseRecommender):
 
     def on_predict_epoch_start(self) -> None:
         """Lightning calls this at the beginning of the predict epoch."""
-        self.candidate_index.update_embeddings(
-            self.negative_sampler.normalize_embeddings(
-                self.preprocessor.get_embedding_by_id(self.candidate_index.ids)
-            )
-        )
+        self._update_candidate_embeddings()
 
     def predict_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Any:
         seq_feature, target_ids = get_sequential_features(

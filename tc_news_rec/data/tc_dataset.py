@@ -36,7 +36,7 @@ class TCDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         file: str | pd.DataFrame,
-        embedding_file: str,
+        embedding_data: str | torch.Tensor | Dict[int, torch.Tensor],
         padding_length: int,
         ignore_last_n: int,
         shift_id_by: int = 0,
@@ -47,6 +47,7 @@ class TCDataset(torch.utils.data.Dataset):
         """
         Args:
             file (str | pd.DataFrame): path or DataFrame containing the dataset
+            embedding_data (str | torch.Tensor | Dict[int, torch.Tensor]): path to embedding file or loaded embedding data
             padding_length (int): _description_
             ignore_last_n (int): number of last interactions to ignore (used for creating train/valid/test sets)
             shift_id_by (int, optional): _description_. Defaults to 0.
@@ -64,7 +65,12 @@ class TCDataset(torch.utils.data.Dataset):
         self._sample_ratio = sample_ratio
         self._additional_columns = additional_columns
         self._cache = dict()
-        self._embedding_data = load_data(embedding_file)
+
+        if isinstance(embedding_data, str):
+            self._embedding_data = load_data(embedding_data)
+        else:
+            self._embedding_data = embedding_data
+
         self._additional_columns_check()
 
     def _additional_columns_check(self):
@@ -163,20 +169,21 @@ class TCDataset(torch.utils.data.Dataset):
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
+        # print(data.keys())
         item_age_history, item_age_history_len = prepare_sequence_ids(
-            data["sequence_age"],
+            data["age_bucket"],
             ignore_last_n=self._ignore_last_n,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_hour_history, item_hour_history_len = prepare_sequence_ids(
-            data["sequence_hour_of_day"],
+            data["hour_of_day"],
             ignore_last_n=self._ignore_last_n,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_day_history, item_day_history_len = prepare_sequence_ids(
-            data["sequence_day_of_week"],
+            data["day_of_week"],
             ignore_last_n=self._ignore_last_n,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
@@ -293,11 +300,8 @@ class TCDataset(torch.utils.data.Dataset):
         def get_embedding(item_id):
             if item_id == 0:
                 return torch.zeros(emb_dim, dtype=torch.float32)
-            if isinstance(self._embedding_data, dict):
-                if item_id in self._embedding_data:
-                    return self._embedding_data[item_id]
-                else:
-                    raise ValueError(f"Item ID {item_id} not found in embedding data.")
+            if isinstance(self._embedding_data, torch.Tensor):
+                return self._embedding_data[item_id]
             else:
                 raise ValueError("Embedding data format not supported.")
 
@@ -339,9 +343,6 @@ class TCDataset(torch.utils.data.Dataset):
             ),
             "history_len": torch.tensor(history_len, dtype=torch.int64),
         }
-        import pdb
-
-        pdb.set_trace()
 
         for column in self._additional_columns:  # type: ignore
             sample_dict[column] = torch.tensor(data[column], dtype=torch.int64)
@@ -349,27 +350,28 @@ class TCDataset(torch.utils.data.Dataset):
 
 
 class TCDataModule(L.LightningDataModule):
-    # TODO: fix the remaining problems with data spilting and hydra config
     def __init__(
         self,
         data_preprocessor: DataProcessor | DictConfig,
-        train_dataset: TCDataset | DictConfig,
-        val_dataset: TCDataset | DictConfig,
-        test_dataset: TCDataset | DictConfig,
+        # dataset_cfg: DictConfig,
+        train_file: str,
+        test_file: str,
+        embedding_file: str,
         max_seq_length: int,
         chronological: bool = False,
         sampling_ratio: float = 1.0,
         batch_size: int = 32,
         num_workers: int = os.cpu_count() // 4,  # type: ignore
         prefetch_factor: int = 4,
-        random_split: bool = False,
+        random_split: bool = True,
         split_ratios: List[float] = [0.8, 0.1, 0.1],
     ) -> None:
         super().__init__()
         self.__dict__.update(locals())
-        self.train_dataset = train_dataset
-        self.val_dataset = val_dataset
-        self.test_dataset = test_dataset
+        # self.dataset_cfg = dataset_cfg
+        self.train_file = train_file
+        self.test_file = test_file
+        self.embedding_file = embedding_file
         self.max_seq_length = max_seq_length
         self.chronological = chronological
         self.sampling_ratio = sampling_ratio
@@ -384,83 +386,73 @@ class TCDataModule(L.LightningDataModule):
             else data_preprocessor
         )
 
+        # Placeholders
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+
     def instantiate_dataset(
         self,
-        dataset: TCDataset | DictConfig,
-        file: Optional[pd.DataFrame] = None,
-        ignore_last_n: Optional[int] = None,
+        file: pd.DataFrame,
+        embedding_data: Any,
+        ignore_last_n: int = 0,
     ) -> TCDataset:
-        if isinstance(dataset, DictConfig):
-            kwargs = {}
-            if "padding_length" not in dataset:
-                kwargs["padding_length"] = self.max_seq_length + 1
-            else:
-                assert dataset.padding_length == self.max_seq_length + 1, (
-                    "Dataset padding_length must be max_seq_length + 1"
-                )
-            if "chronological" not in dataset:
-                kwargs["chronological"] = self.chronological
-            if "sample_ratio" not in dataset:
-                kwargs["sample_ratio"] = self.sampling_ratio
-            if "file" not in dataset or "embedding_file" not in dataset:
-                raise ValueError("Dataset config must contain 'file' key.")
+        kwargs = {}
+        kwargs["padding_length"] = self.max_seq_length + 1
+        kwargs["chronological"] = self.chronological
+        kwargs["sample_ratio"] = self.sampling_ratio
+        kwargs["file"] = file
+        kwargs["embedding_data"] = embedding_data
+        kwargs["ignore_last_n"] = ignore_last_n
 
-            if file is not None:
-                kwargs["file"] = file
-
-            if ignore_last_n is not None:
-                kwargs["ignore_last_n"] = ignore_last_n
-
-            log.info(
-                f"Instantiating instance <{dataset._target_}> with extra {pformat(kwargs)} on file"
-            )
-            return hydra.utils.instantiate(dataset, **kwargs, _recursive_=False)
-        else:
-            return dataset
+        dataset = TCDataset(**kwargs)
+        return dataset
 
     def setup(self, stage: Optional[str] = None) -> None:
+        # Load data once
+        print(f"Loading data from {self.train_file} and {self.test_file}")
+        log.info(f"Loading data from {self.train_file} and {self.test_file}")
+        train_df = load_data(self.train_file)
+        test_df = load_data(self.test_file)
+
+        print(f"Loading embeddings from {self.embedding_file}")
+        log.info(f"Loading embeddings from {self.embedding_file}")
+        embedding_data = load_data(self.embedding_file)
+
         if self.random_split:
             log.info("Using random split strategy for datasets.")
-            # Load full data from train_dataset config
-            if isinstance(self.train_dataset, DictConfig):
-                file_path = self.train_dataset.file
-                full_df = load_data(file_path)
+            # Shuffle and split
+            full_df = train_df.sample(frac=1).reset_index(drop=True)
+            n = len(full_df)
+            train_len = int(n * self.split_ratios[0])
+            val_len = int(n * self.split_ratios[1])
 
-                # Shuffle and split
-                full_df = full_df.sample(frac=1).reset_index(drop=True)
-                n = len(full_df)
-                train_len = int(n * self.split_ratios[0])
-                val_len = int(n * self.split_ratios[1])
+            train_df = full_df.iloc[:train_len]
+            val_df = full_df.iloc[train_len : train_len + val_len]
 
-                train_df = full_df.iloc[:train_len]
-                val_df = full_df.iloc[train_len : train_len + val_len]
-                test_df = full_df.iloc[train_len + val_len :]
+            log.info(
+                f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}"
+            )
 
-                log.info(
-                    f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}"
+            if stage == "fit" or stage is None:
+                self.train_dataset = self.instantiate_dataset(
+                    file=train_df, embedding_data=embedding_data, ignore_last_n=0
                 )
-
-                if stage == "fit" or stage is None:
-                    self.train_dataset = self.instantiate_dataset(
-                        self.train_dataset, file=train_df, ignore_last_n=0
-                    )
-                    self.val_dataset = self.instantiate_dataset(
-                        self.train_dataset, file=val_df, ignore_last_n=0
-                    )
-                if stage == "test" or stage is None:
-                    self.test_dataset = self.instantiate_dataset(
-                        self.train_dataset, file=test_df, ignore_last_n=0
-                    )
-            else:
-                raise ValueError(
-                    "train_dataset must be a DictConfig when using random_split."
+                self.val_dataset = self.instantiate_dataset(
+                    file=val_df, embedding_data=embedding_data, ignore_last_n=0
+                )
+            if stage == "test" or stage is None:
+                self.test_dataset = self.instantiate_dataset(
+                    file=test_df, embedding_data=embedding_data, ignore_last_n=0
                 )
         else:
-            if stage == "fit" or stage is None:
-                self.train_dataset = self.instantiate_dataset(self.train_dataset)
-                self.val_dataset = self.instantiate_dataset(self.val_dataset)
-            if stage == "test" or stage is None:
-                self.test_dataset = self.instantiate_dataset(self.test_dataset)
+            # If not random split, we assume the file contains everything and we might need logic to split by time or user
+            # But for now, let's just use the same file for all if random_split is False (or raise error as per previous logic)
+            # Or maybe the user intends to provide different files? But we only have one 'file' argument now.
+            # Assuming random_split is the primary mode as requested.
+            raise NotImplementedError(
+                "Non-random split strategy is not implemented yet."
+            )
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
