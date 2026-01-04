@@ -192,7 +192,7 @@ def _hstu_attention_maybe_from_cache(
     if all_timestamps is not None:
         qk_attn = qk_attn + rel_attn_bias(all_timestamps).unsqueeze(1)
     qk_attn = F.silu(qk_attn) / n
-    qk_attn = qk_attn * invalid_attn_mask.unsqueeze(0).unsqueeze(0)
+    qk_attn = qk_attn * invalid_attn_mask.unsqueeze(0).unsqueeze(0).to(qk_attn.device)
     attn_output = ops.dense_to_jagged(
         torch.einsum(
             "bhnm,bmhd->bnhd",
@@ -407,7 +407,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
             a = self._norm_attn_output(attn_output)
             o_input = torch.cat([u, a, u * a], dim=-1)
         else:
-            o_input = u * self._norm_attn_output(attn_output)
+            o_input = u * self._norm_attn_output(attn_output).to(u.device)
 
         new_outputs = (
             self._o(

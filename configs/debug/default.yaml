@@ -12,8 +12,8 @@ hydra:
 
 trainer:
   max_epochs: 1
-  accelerator: cpu
-  devices: 1
+  accelerator: gpu
+  devices: [6]
   detect_anomaly: true
   limit_train_batches: 2
   limit_val_batches: 2

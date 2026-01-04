@@ -33,7 +33,7 @@ class LocalEmbeddingModule(EmbeddingModule):
         
     def reset_params(self) -> None:
         for name, p in self.named_parameters():
-            if "_item_emb" in name:
+            if "_item_embedding" in name:
                 truncated_normal(p, mean=0.0, std=0.02)
     
     def get_item_embeddings(self, item_ids: torch.Tensor) -> torch.Tensor:

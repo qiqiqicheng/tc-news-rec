@@ -34,12 +34,12 @@ class GlobalNegativeSampler(NegativeSampler):
     def set_item_embedding(self, item_emb: torch.nn.Embedding) -> None:
         self._item_emb = item_emb
 
-    def set_all_item_ids(self, all_item_ids: List[int]) -> None:
+    def set_all_item_ids(self, all_item_ids: List[int], device: torch.device) -> None:
         self._num_items = len(all_item_ids)
         # TODO: understand register_buffer
         if not hasattr(self, "_all_item_ids"):
             self.register_buffer(
-                "_all_item_ids", torch.tensor(all_item_ids, dtype=torch.long)
+                "_all_item_ids", torch.tensor(all_item_ids, dtype=torch.long, device=device)
             )
         else:
             self._all_item_ids = torch.tensor(all_item_ids, dtype=torch.long).to(

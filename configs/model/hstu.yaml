@@ -7,12 +7,22 @@ _target_: tc_news_rec.models.models.RetreivalModel
 k: 5
 
 optimizer:
-  _target_: torch.optim.SGD
+  _target_: torch.optim.AdamW
   _partial_: true
+  lr: 0.0005
+  betas: [0.9, 0.95]
+  eps: 1e-8
+  weight_decay: 0.01
 
 scheduler:
-  _target_: torch.optim.lr_scheduler.ConstantLR
+  _target_: torch.optim.lr_scheduler.OneCycleLR
   _partial_: true
+  max_lr: 0.0005
+  pct_start: 0.05
+  div_factor: 25.0
+  final_div_factor: 1000.0
+  anneal_strategy: 'cos'
+  total_steps: ???
 
 configure_optimizer_params:
   monitor: val/hr@5

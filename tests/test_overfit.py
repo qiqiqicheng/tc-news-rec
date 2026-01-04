@@ -34,6 +34,7 @@ def test_overfitting(debug_cfg: DictConfig):
 
     cfg.paths.output_dir = os.path.join(cwd, "logs/test_overfit")
     cfg.paths.work_dir = cwd
+    
 
     # --- Overfitting Configuration ---
     # Use a single batch for training and validation
@@ -43,6 +44,7 @@ def test_overfitting(debug_cfg: DictConfig):
 
     # Train long enough to converge
     cfg.trainer.max_epochs = 100
+    cfg.model.scheduler.total_steps = 100
 
     # Check validation frequently
     cfg.trainer.check_val_every_n_epoch = 10
@@ -53,8 +55,16 @@ def test_overfitting(debug_cfg: DictConfig):
     cfg.trainer.limit_test_batches = None
 
     # Ensure we are on CPU for this small test (or GPU if available, but let's stick to config)
-    cfg.trainer.accelerator = "cpu"
-    cfg.trainer.devices = 1
+    cfg.trainer.accelerator = "gpu"
+    cfg.trainer.devices = [6]
+    
+    # # --- AdamW Optimizer Configuration ---
+    # # Use AdamW with a high learning rate for overfitting
+    # cfg.model.optimizer = {
+    #     "_target_": "torch.optim.AdamW",
+    #     "lr": 0.001,
+    #     "weight_decay": 0.0,
+    # }
 
     # --- Instantiation ---
     L.seed_everything(42)  # Fix seed for reproducibility

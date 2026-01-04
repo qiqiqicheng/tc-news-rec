@@ -7,6 +7,7 @@ __logged_errors = set()
 
 try:
     import fbgemm_gpu  # noqa
+
     log.info("Successfully imported fbgemm_gpu.")
 except ImportError:
     if "fbgemm_gpu" not in __logged_errors:
@@ -35,7 +36,10 @@ def asynchronous_complete_cumsum(lengths: torch.Tensor) -> torch.Tensor:
             )
 
         return torch.cat(
-            (torch.tensor([0], dtype=lengths.dtype), torch.cumsum(lengths, dim=0))
+            (
+                torch.tensor([0], dtype=lengths.dtype, device=lengths.device),
+                torch.cumsum(lengths, dim=0),
+            )
         )
 
 
@@ -103,7 +107,10 @@ def jagged_to_padded_dense(
 
         # Initialize the padded tensor
         padded_tensor = torch.full(
-            (num_sequences, max_lengths, *sequences_shape), padding_value
+            (num_sequences, max_lengths, *sequences_shape),
+            padding_value,
+            device=values.device,
+            dtype=values.dtype,
         )
 
         # Fill in the padded tensor with values from the jagged tensors
@@ -185,7 +192,9 @@ def get_current_embeddings(
     flattened_offsets = (lengths - 1) + torch.arange(
         start=0, end=B, step=1, dtype=lengths.dtype, device=lengths.device
     ) * N
-    return encoded_embeddings.reshape(-1, D)[flattened_offsets, :].reshape(B, D)
+    return encoded_embeddings.reshape(-1, D)[
+        flattened_offsets.to(encoded_embeddings.device), :
+    ].reshape(B, D)
 
 
 def jagged_or_dense_repeat_interleave_dim0(
@@ -249,13 +258,16 @@ def mask_dense_by_aux_mask(
     jagged_mask = dense_to_jagged(aux_mask, offsets)  # (B*N,)
 
     # then mask the jagged tensor by aux_mask
-    masked_jagged_tensor = jagged_tensor[jagged_mask]
+    masked_jagged_tensor = jagged_tensor[jagged_mask.to(jagged_tensor.device)]
     new_lengths = aux_mask.int().sum(dim=1)
 
     # then convert the masked jagged tensor back to dense
-    return jagged_to_padded_dense(
-        values=masked_jagged_tensor,
-        offsets=asynchronous_complete_cumsum(new_lengths),
-        max_lengths=max_lengths,
-        padding_value=0.0,
-    ), new_lengths
+    return (
+        jagged_to_padded_dense(
+            values=masked_jagged_tensor,
+            offsets=asynchronous_complete_cumsum(new_lengths),
+            max_lengths=max_lengths,
+            padding_value=0.0,
+        ),
+        new_lengths,
+    )

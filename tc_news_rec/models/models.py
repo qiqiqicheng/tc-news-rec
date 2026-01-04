@@ -182,7 +182,7 @@ class BaseRecommender(L.LightningModule):
             dict[str, Any]: A dict containing the configured optimizers and learning-rate
                 schedulers to be used for training.
         """
-        optimizer = self.optimizer(params=self.trainer.model.parameters())  # type: ignore
+        optimizer = self.optimizer(params=self.parameters())  # type: ignore
         if self.scheduler is not None:
             scheduler = self.scheduler(optimizer=optimizer)  # type: ignore
             return {
@@ -309,7 +309,7 @@ class BaseRecommender(L.LightningModule):
 class RetreivalModel(BaseRecommender):
     def forward(
         self, seq_features: SequentialFeatures
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Lightning calls this inside the training loop
 
@@ -317,34 +317,38 @@ class RetreivalModel(BaseRecommender):
             seq_features (SequentialFeatures): past_lens, past_ids, past_payloads with batch size B
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]:
-                - encoded_embeddings: [B, D]
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                - encoded_embeddings: [B, N, D] encoded sequence embeddings
+                - valid_lengths: [B,] valid lengths after preprocessing (includes aux token)
                 - cached_states: returned from encoder
         """
-        past_lens, seq_embeddings, valid_mask, aux_mask = self.preprocessor(
+        # preprocessor returns past_lens + 1 (adding aux token)
+        past_lens_with_aux, seq_embeddings, valid_mask, aux_mask = self.preprocessor(
             past_lens=seq_features.past_lens,
             past_ids=seq_features.past_ids,
             past_payloads=seq_features.past_payloads,
         )
-        # import pdb; pdb.set_trace()
+
         encoded_embeddings, cached_states = self.sequence_encoder(
-            past_lengths=past_lens,
+            past_lengths=past_lens_with_aux,
             user_embeddings=seq_embeddings,
             valid_mask=valid_mask,
             past_payloads=seq_features.past_payloads,
         )
-        # pdb.set_trace()
 
+        # Apply aux_mask to filter valid positions and get the actual valid lengths
+        # valid_lengths will be used for downstream jagged operations
+        valid_lengths = past_lens_with_aux  # default: past_lens + 1
         if aux_mask is not None:
-            encoded_embeddings, _ = ops.mask_dense_by_aux_mask(
+            encoded_embeddings, valid_lengths = ops.mask_dense_by_aux_mask(
                 encoded_embeddings,
                 aux_mask,
-                past_lens,
+                past_lens_with_aux,
                 max_lengths=seq_features.past_ids.size(1),
             )
 
         encoded_embeddings = self.postprocessor(encoded_embeddings)
-        return encoded_embeddings, cached_states
+        return encoded_embeddings, valid_lengths, cached_states
 
     def _update_candidate_embeddings(self) -> None:
         item_emb_module = self.preprocessor.get_item_id_embedding_module()
@@ -371,9 +375,10 @@ class RetreivalModel(BaseRecommender):
                 - topk_ids: [B, K]
                 - topk_scores: [B, K]
         """
-        encoded_embeddings, _ = self.forward(seq_features)
+        encoded_embeddings, valid_lengths, _ = self.forward(seq_features)
+        # Use valid_lengths returned from forward() for correct position indexing
         current_embeddings = ops.get_current_embeddings(
-            seq_features.past_lens + 1, encoded_embeddings  # NOTE: +1 for aux token
+            valid_lengths, encoded_embeddings
         )
 
         if self.candidate_index.embeddings is None:
@@ -395,14 +400,20 @@ class RetreivalModel(BaseRecommender):
         seq_features, target_ids = get_sequential_features(
             batch, device=self.device, max_output_length=self.gr_output_length + 1
         )
+
+        # Place target_id at the correct position in past_ids
+        # After preprocessor adds aux token at position 0, the sequence becomes:
+        # [aux, item1, item2, ..., itemN, 0, 0, ...]
+        # We want to place target at position (past_lens), which after aux shift
+        # corresponds to the position right after the last historical item
         seq_features.past_ids.scatter_(
             dim=1,
             index=seq_features.past_lens.view(-1, 1),
             src=target_ids.view(-1, 1),
         )
 
-        # forward
-        encoded_embeddings, _ = self.forward(seq_features)
+        # Forward pass returns valid_lengths which accounts for aux token
+        encoded_embeddings, valid_lengths, _ = self.forward(seq_features)
 
         if isinstance(self.negative_sampler, InBatchNegativesSampler):
             in_batch_ids = seq_features.past_ids.view(-1)
@@ -412,22 +423,53 @@ class RetreivalModel(BaseRecommender):
                 embeddings=self.preprocessor.get_embedding_by_id(in_batch_ids),
             )
         elif isinstance(self.negative_sampler, GlobalNegativeSampler):
-            # TODO: find a better way to set item embedding
             self.negative_sampler.set_item_embedding(
                 self.preprocessor.get_item_id_embedding_module()
             )
-            self.negative_sampler.set_all_item_ids(self.preprocessor.get_all_item_ids())
+            self.negative_sampler.set_all_item_ids(
+                self.preprocessor.get_all_item_ids(), device=encoded_embeddings.device
+            )
 
+        # Construct autoregressive supervision signals:
+        # For autoregressive training, output at position i should predict item at position i+1
+        # After preprocessor, sequence is: [aux, item1, item2, ..., itemN, target, 0, ...]
+        # Output[0] (aux position) -> predicts item1
+        # Output[1] (item1 position) -> predicts item2
+        # ...
+        # Output[N] (itemN position) -> predicts target
+        #
+        # So supervision_ids should be the NEXT item for each position:
+        # supervision_ids = past_ids shifted left by 1 (i.e., past_ids[:, 1:])
         all_ids = seq_features.past_ids
 
+        # Shift supervision_ids by 1 to get next-item targets
+        # output_embeddings[i] should predict supervision_ids[i] = all_ids[i+1]
+        supervision_ids = all_ids[
+            :, 1:
+        ]  # [B, N-1] - the target for each output position
+        output_embeddings_for_loss = encoded_embeddings[
+            :, :-1, :
+        ]  # [B, N-1, D] - exclude last position
+
+        # Adjust valid_lengths: we lose one position due to the shift
+        # valid_lengths was (past_lens + 1), now we use (past_lens + 1 - 1) = past_lens
+        # But we need to be careful: valid_lengths already accounts for aux token
+        supervision_lengths = valid_lengths - 1  # [B,]
+        supervision_lengths = torch.clamp(
+            supervision_lengths, min=0
+        )  # ensure non-negative
+
+        # supervision_weights: mask out padding positions
+        supervision_weights = (supervision_ids != 0).float()  # [B, N-1]
+
         jagged_features = self.dense_to_jagged(
-            lengths=seq_features.past_lens + 1,
-            output_embeddings=encoded_embeddings,  # [B, N, D] -> [T, D]
-            supervision_ids=all_ids,  # [B, N] -> [T,]
+            lengths=supervision_lengths,
+            output_embeddings=output_embeddings_for_loss,  # [B, N-1, D] -> [T, D]
+            supervision_ids=supervision_ids,  # [B, N-1] -> [T,]
             supervision_embeddings=self.preprocessor.get_embedding_by_id(
-                all_ids
-            ),  # [B, N, D] -> [T, D]
-            supervision_weights=(all_ids != 0).float(),  # [B, N] -> [T,]
+                supervision_ids
+            ),  # [B, N-1, D] -> [T, D]
+            supervision_weights=supervision_weights,  # [B, N-1] -> [T,]
         )
 
         loss = self.loss_fn.jagged_forward(

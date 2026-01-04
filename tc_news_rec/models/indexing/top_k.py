@@ -55,7 +55,7 @@ class MIPSBruteTopK(TopKModule):
                 - topk_scores (torch.Tensor): [B, k]
                 - topk_item_ids (torch.Tensor): [B, k]
         """
-        all_logits = torch.mm(query_embeddings, item_embeddings_t)  # [B, X]
+        all_logits = torch.mm(query_embeddings.to(item_embeddings_t.device), item_embeddings_t)  # [B, X]
         topk_logits, topk_indices = torch.topk(
             all_logits, 
             k=k, 

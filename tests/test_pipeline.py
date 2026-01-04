@@ -42,8 +42,8 @@ def _test_full_pipeline(debug_cfg: DictConfig):
     cfg.trainer.limit_train_batches = 2
     cfg.trainer.limit_val_batches = 2
     cfg.trainer.limit_test_batches = 2
-    cfg.trainer.accelerator = "cpu"
-    cfg.trainer.devices = 1
+    cfg.trainer.accelerator = "gpu"
+    cfg.trainer.devices = [6]
 
     datamodule = hydra.utils.instantiate(cfg.data)
 
@@ -61,10 +61,10 @@ def _test_full_pipeline(debug_cfg: DictConfig):
     trainer.test(model=model, datamodule=datamodule)
 
 
-if __name__ == "__main__":
-    # Allow running this script directly
-    from hydra import initialize, compose
+# if __name__ == "__main__":
+#     # Allow running this script directly
+#     from hydra import initialize, compose
 
-    with initialize(config_path="../configs", version_base=None):
-        cfg = compose(config_name="train", overrides=["debug=default"])
-    test_full_pipeline(cfg)
+#     with initialize(config_path="../configs", version_base=None):
+#         cfg = compose(config_name="train", overrides=["debug=default"])
+#     test_full_pipeline(cfg)
