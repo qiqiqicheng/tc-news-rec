@@ -123,15 +123,16 @@ class SampledSoftmaxLoss(AutoregressiveLoss):
             torch.Tensor: _loss value
         """
         negative_ids, negative_embeddings = negative_sampler(
-            postive_item_ids=supervision_ids, num_to_sample=self._num_to_sample
+            positive_item_ids=supervision_ids, num_to_sample=self._num_to_sample
         )  # [T, num_to_sample], [T, num_to_sample, D]
 
         positive_logits = (
             similarity_module(
                 input_embeddings=output_embeddings,  # [T, D]
                 item_embeddings=supervision_embeddings.unsqueeze(1),  # [T, 1, D]
-            )  # [T, 1]
-            .squeeze(1)  # [T,]
+            ).squeeze(  # [T, 1]
+                1
+            )  # [T,]
             / self._softmax_temperature  # [T,]
         )
 

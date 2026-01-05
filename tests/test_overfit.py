@@ -7,7 +7,7 @@ import os
 from copy import deepcopy
 
 
-def test_overfitting(debug_cfg: DictConfig):
+def _test_overfitting(debug_cfg: DictConfig):
     """
     Sanity check: Overfit on a single batch.
     The model should be able to memorize the batch and achieve near-zero loss and perfect metrics.

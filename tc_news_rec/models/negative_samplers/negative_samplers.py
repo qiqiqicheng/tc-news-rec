@@ -16,7 +16,7 @@ class NegativeSampler(torch.nn.Module):
 
     @abc.abstractmethod
     def forward(
-        self, postive_item_ids: torch.Tensor, num_to_sample: int
+        self, positive_item_ids: torch.Tensor, num_to_sample: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         pass
 
@@ -39,7 +39,8 @@ class GlobalNegativeSampler(NegativeSampler):
         # TODO: understand register_buffer
         if not hasattr(self, "_all_item_ids"):
             self.register_buffer(
-                "_all_item_ids", torch.tensor(all_item_ids, dtype=torch.long, device=device)
+                "_all_item_ids",
+                torch.tensor(all_item_ids, dtype=torch.long, device=device),
             )
         else:
             self._all_item_ids = torch.tensor(all_item_ids, dtype=torch.long).to(
@@ -47,11 +48,11 @@ class GlobalNegativeSampler(NegativeSampler):
             )
 
     def forward(
-        self, postive_item_ids: torch.Tensor, num_to_sample: int
+        self, positive_item_ids: torch.Tensor, num_to_sample: int
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            postive_item_ids (torch.Tensor): [B,] or [B, L] (transformer)
+            positive_item_ids (torch.Tensor): [B,] or [B, L] (transformer)
             num_to_sample (int): _number of negative samples to draw
 
         Returns:
@@ -64,13 +65,13 @@ class GlobalNegativeSampler(NegativeSampler):
         if self._all_item_ids is None:
             raise ValueError("All item ids are not set for GlobalNegativeSampler")
 
-        output_shape = postive_item_ids.shape + (num_to_sample,)
+        output_shape = positive_item_ids.shape + (num_to_sample,)
         sampled_offsets = torch.randint(
             low=0,
             high=self._num_items,
             size=output_shape,
-            dtype=postive_item_ids.dtype,
-            device=postive_item_ids.device,
+            dtype=positive_item_ids.dtype,
+            device=positive_item_ids.device,
         )
         sampled_ids = self._all_item_ids[sampled_offsets.view(-1)].reshape(output_shape)  # type: ignore
 
