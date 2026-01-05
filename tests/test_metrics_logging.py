@@ -1,25 +1,16 @@
-"""
-Test suite for metrics computation and CSV logging.
+import csv
+import os
+import shutil
+import tempfile
+from copy import deepcopy
+from pathlib import Path
 
-This module tests:
-1. RetrievalMetrics correctness (NDCG, HR, MRR)
-2. Metric edge cases and boundary conditions
-3. CSVLogger integration with Lightning
-4. Logging format and file output
-"""
-
+import hydra
+import lightning as L
 import pytest
 import torch
-import os
-import tempfile
-import shutil
-from pathlib import Path
-import csv
-import hydra
-from copy import deepcopy
-from omegaconf import DictConfig, OmegaConf
-import lightning as L
 from lightning.pytorch.loggers import CSVLogger
+from omegaconf import DictConfig, OmegaConf
 
 from tc_news_rec.models.metrics.retrieval_metrics import RetrievalMetrics
 from tc_news_rec.models.utils.features import get_sequential_features
@@ -114,12 +105,10 @@ class TestNDCGComputation:
         metrics = RetrievalMetrics(k=10, at_k_list=[1, 5, 10])
 
         # Target is always the first result
-        top_k_ids = torch.tensor(
-            [
-                [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],
-                [15, 12, 13, 14, 16, 17, 18, 19, 20, 21],
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],
+            [15, 12, 13, 14, 16, 17, 18, 19, 20, 21],
+        ])
         target_ids = torch.tensor([5, 15])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -135,11 +124,9 @@ class TestNDCGComputation:
         metrics = RetrievalMetrics(k=10, at_k_list=[1, 5, 10])
 
         # Target is at position 2
-        top_k_ids = torch.tensor(
-            [
-                [1, 5, 3, 4, 6, 7, 8, 9, 10, 11],
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [1, 5, 3, 4, 6, 7, 8, 9, 10, 11],
+        ])
         target_ids = torch.tensor([5])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -158,11 +145,9 @@ class TestNDCGComputation:
         metrics = RetrievalMetrics(k=5, at_k_list=[1, 5])
 
         # Target is not in top-k
-        top_k_ids = torch.tensor(
-            [
-                [1, 2, 3, 4, 6],  # target 5 not present
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [1, 2, 3, 4, 6],  # target 5 not present
+        ])
         target_ids = torch.tensor([5])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -186,13 +171,11 @@ class TestHitRateComputation:
         metrics = RetrievalMetrics(k=10, at_k_list=[5, 10])
 
         # All targets are in top-5
-        top_k_ids = torch.tensor(
-            [
-                [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],
-                [15, 12, 13, 14, 16, 17, 18, 19, 20, 21],
-                [25, 22, 23, 24, 26, 27, 28, 29, 30, 31],
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],
+            [15, 12, 13, 14, 16, 17, 18, 19, 20, 21],
+            [25, 22, 23, 24, 26, 27, 28, 29, 30, 31],
+        ])
         target_ids = torch.tensor([5, 15, 25])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -206,12 +189,10 @@ class TestHitRateComputation:
         metrics = RetrievalMetrics(k=5, at_k_list=[1, 5])
 
         # No targets in top-k
-        top_k_ids = torch.tensor(
-            [
-                [1, 2, 3, 4, 6],
-                [11, 12, 13, 14, 16],
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [1, 2, 3, 4, 6],
+            [11, 12, 13, 14, 16],
+        ])
         target_ids = torch.tensor([100, 200])  # Not in top-k
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -225,14 +206,12 @@ class TestHitRateComputation:
         metrics = RetrievalMetrics(k=5, at_k_list=[5])
 
         # 2 out of 4 targets found
-        top_k_ids = torch.tensor(
-            [
-                [5, 2, 3, 4, 6],  # target 5 found
-                [1, 2, 3, 4, 6],  # target 15 not found
-                [25, 2, 3, 4, 6],  # target 25 found
-                [1, 2, 3, 4, 6],  # target 35 not found
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [5, 2, 3, 4, 6],  # target 5 found
+            [1, 2, 3, 4, 6],  # target 15 not found
+            [25, 2, 3, 4, 6],  # target 25 found
+            [1, 2, 3, 4, 6],  # target 35 not found
+        ])
         target_ids = torch.tensor([5, 15, 25, 35])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -254,12 +233,10 @@ class TestMRRComputation:
         """Test MRR when all targets are at rank 1."""
         metrics = RetrievalMetrics(k=10, at_k_list=[10])
 
-        top_k_ids = torch.tensor(
-            [
-                [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],
-                [15, 12, 13, 14, 16, 17, 18, 19, 20, 21],
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],
+            [15, 12, 13, 14, 16, 17, 18, 19, 20, 21],
+        ])
         target_ids = torch.tensor([5, 15])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -273,13 +250,11 @@ class TestMRRComputation:
         metrics = RetrievalMetrics(k=10, at_k_list=[10])
 
         # Targets at ranks 1, 2, 5
-        top_k_ids = torch.tensor(
-            [
-                [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],  # rank 1
-                [1, 15, 3, 4, 6, 7, 8, 9, 10, 11],  # rank 2
-                [1, 2, 3, 4, 25, 7, 8, 9, 10, 11],  # rank 5
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [5, 2, 3, 4, 6, 7, 8, 9, 10, 11],  # rank 1
+            [1, 15, 3, 4, 6, 7, 8, 9, 10, 11],  # rank 2
+            [1, 2, 3, 4, 25, 7, 8, 9, 10, 11],  # rank 5
+        ])
         target_ids = torch.tensor([5, 15, 25])
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -293,11 +268,9 @@ class TestMRRComputation:
         """Test MRR when target is not in top-k."""
         metrics = RetrievalMetrics(k=5, at_k_list=[5])
 
-        top_k_ids = torch.tensor(
-            [
-                [1, 2, 3, 4, 6],
-            ]
-        )
+        top_k_ids = torch.tensor([
+            [1, 2, 3, 4, 6],
+        ])
         target_ids = torch.tensor([100])  # Not found
 
         metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
@@ -411,7 +384,7 @@ class TestCSVLoggerIntegration:
         assert metrics_file.exists(), f"Metrics file not found at {metrics_file}"
 
         # Read and verify CSV content
-        with open(metrics_file, "r") as f:
+        with open(metrics_file) as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
@@ -427,8 +400,18 @@ class TestCSVLoggerIntegration:
                 self.metrics = RetrievalMetrics(k=10, at_k_list=[1, 5, 10])
 
             def training_step(self, batch, batch_idx):
-                loss = torch.tensor(0.5 - batch_idx * 0.1)
-                self.log("train/loss", loss, prog_bar=True, logger=True)
+                # Use the layer to create a loss that requires grad
+                output = self.layer(batch.squeeze(0))
+                loss = output.mean()
+                # on_epoch=True ensures the metric is logged to CSV at epoch end
+                self.log(
+                    "train/loss",
+                    loss,
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                    logger=True,
+                )
                 return loss
 
             def validation_step(self, batch, batch_idx):
@@ -485,7 +468,7 @@ class TestCSVLoggerIntegration:
 
         assert metrics_file.exists(), f"Metrics file not found at {metrics_file}"
 
-        with open(metrics_file, "r") as f:
+        with open(metrics_file) as f:
             content = f.read()
 
         # Check that expected metrics are logged
@@ -532,26 +515,14 @@ class TestFullModelMetricsLogging:
         data_config = deepcopy(debug_cfg.data)
 
         cwd = os.getcwd()
-        model_config.preprocessor.feature_counts = os.path.join(
-            cwd, "user_data/processed/feature_counts.json"
-        )
-        data_config.train_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_train.csv"
-        )
-        data_config.test_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_test.csv"
-        )
-        data_config.embedding_file = os.path.join(
-            cwd, "user_data/processed/article_embedding.pt"
-        )
+        model_config.preprocessor.feature_counts = os.path.join(cwd, "user_data/processed/feature_counts.json")
+        data_config.train_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_train.csv")
+        data_config.test_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_test.csv")
+        data_config.embedding_file = os.path.join(cwd, "user_data/processed/article_embedding.pt")
         data_config.data_preprocessor.data_dir = os.path.join(cwd, "tcdata")
-        data_config.data_preprocessor.output_dir = os.path.join(
-            cwd, "user_data/processed"
-        )
+        data_config.data_preprocessor.output_dir = os.path.join(cwd, "user_data/processed")
 
-        return hydra.utils.instantiate(
-            model_config, datamodule=data_config, _recursive_=False
-        )
+        return hydra.utils.instantiate(model_config, datamodule=data_config, _recursive_=False)
 
     def test_model_metrics_update(self, model, debug_cfg, fake_batch):
         """Test that model correctly updates metrics during validation."""
@@ -560,9 +531,7 @@ class TestFullModelMetricsLogging:
         model.eval()
 
         max_output_length = debug_cfg.model.gr_output_length + 1
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         # Simulate validation step
         model.metrics.reset()
@@ -583,9 +552,7 @@ class TestFullModelMetricsLogging:
         model.eval()
 
         max_output_length = debug_cfg.model.gr_output_length + 1
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         model.metrics.reset()
         top_k_ids, _ = model.retrieve(seq_features, k=model.k, filter_past_ids=True)

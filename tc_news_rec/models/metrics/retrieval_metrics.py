@@ -47,6 +47,15 @@ class RetrievalMetrics(torchmetrics.Metric):
         target_ids = torchmetrics.utilities.dim_zero_cat(self.target_ids)  # type: ignore
 
         assert top_k_ids.size(1) == self.k
+
+        # Ensure target_ids is 2D [B, 1] for proper broadcasting
+        # After dim_zero_cat, target_ids could be [B,] or [B, 1] depending on input shape
+        if target_ids.dim() == 1:
+            target_ids = target_ids.unsqueeze(1)  # [B,] -> [B, 1]
+        # If already 2D, ensure it's [B, 1] not [B, N]
+        elif target_ids.dim() == 2 and target_ids.size(1) != 1:
+            target_ids = target_ids.view(-1, 1)
+
         _, rank_indices = torch.max(
             torch.cat(
                 [top_k_ids, target_ids],

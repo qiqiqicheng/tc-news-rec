@@ -1,19 +1,9 @@
-"""
-Test suite for CandidateIndex synchronization mechanism.
-
-This module tests:
-1. CandidateIndex initialization and embedding storage
-2. Embedding update mechanism (_update_candidate_embeddings)
-3. Synchronization between model item embeddings and candidate index
-4. Top-k retrieval with updated embeddings
-5. Invalid ID filtering in retrieval
-"""
-
-import pytest
-import torch
-import hydra
 import os
 from copy import deepcopy
+
+import hydra
+import pytest
+import torch
 from omegaconf import DictConfig, OmegaConf
 
 from tc_news_rec.models.indexing.candidate_index import CandidateIndex
@@ -48,7 +38,8 @@ class TestCandidateIndexBasic:
         assert index.ids.shape == (1, num_items)
         assert index.num_objects == num_items
         assert index.embeddings is not None
-        assert index.embeddings.shape == (num_items, emb_dim)
+        # embeddings property returns [1, X, D] to match ids shape [1, X]
+        assert index.embeddings.shape == (1, num_items, emb_dim)
 
     def test_initialization_without_embeddings(self):
         """Test CandidateIndex initialization without embeddings."""
@@ -87,12 +78,12 @@ class TestCandidateIndexBasic:
 
         # Verify embeddings are stored
         assert index.embeddings is not None
-        assert index.embeddings.shape == (num_items, emb_dim)
+        # embeddings property returns [1, X, D] to match ids shape [1, X]
+        assert index.embeddings.shape == (1, num_items, emb_dim)
 
-        # Verify the content matches (accounting for transpose operations)
+        # Verify the content matches
         retrieved_emb = index.embeddings
-        expected_emb = new_embeddings.squeeze(0)  # [num_items, emb_dim]
-        assert torch.allclose(retrieved_emb, expected_emb, atol=1e-6)
+        assert torch.allclose(retrieved_emb, new_embeddings, atol=1e-6)
 
     def test_update_embeddings_overwrite(self):
         """Test that update_embeddings overwrites previous embeddings."""
@@ -108,15 +99,15 @@ class TestCandidateIndexBasic:
             top_k_module=MIPSBruteTopK(),
         )
 
-        # Verify initial embeddings
-        assert torch.allclose(index.embeddings, torch.ones(num_items, emb_dim))
+        # Verify initial embeddings (shape is [1, num_items, emb_dim])
+        assert torch.allclose(index.embeddings, torch.ones(1, num_items, emb_dim))
 
         # Update with new embeddings
         new_embeddings = torch.zeros(1, num_items, emb_dim)
         index.update_embeddings(new_embeddings)
 
         # Verify new embeddings replaced old ones
-        assert torch.allclose(index.embeddings, torch.zeros(num_items, emb_dim))
+        assert torch.allclose(index.embeddings, torch.zeros(1, num_items, emb_dim))
 
 
 # =============================================================================
@@ -136,9 +127,7 @@ class TestTopKRetrieval:
         ids = torch.arange(1, num_items + 1).view(1, -1)
 
         # Create embeddings where item i has embedding = [i, i, i, ...] normalized
-        embeddings = (
-            torch.arange(1, num_items + 1).float().view(-1, 1).expand(-1, emb_dim)
-        )
+        embeddings = torch.arange(1, num_items + 1).float().view(-1, 1).expand(-1, emb_dim)
         embeddings = embeddings / embeddings.norm(dim=-1, keepdim=True)
         embeddings = embeddings.unsqueeze(0)  # [1, num_items, emb_dim]
 
@@ -156,9 +145,7 @@ class TestTopKRetrieval:
         emb_dim = 32
 
         query_embeddings = torch.randn(B, emb_dim)
-        query_embeddings = query_embeddings / query_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        query_embeddings = query_embeddings / query_embeddings.norm(dim=-1, keepdim=True)
 
         top_k_ids, top_k_scores = index_with_embeddings.get_top_k_outputs(
             query_embeddings=query_embeddings,
@@ -174,9 +161,7 @@ class TestTopKRetrieval:
         k = 20
 
         query_embeddings = torch.randn(B, 32)
-        query_embeddings = query_embeddings / query_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        query_embeddings = query_embeddings / query_embeddings.norm(dim=-1, keepdim=True)
 
         top_k_ids, _ = index_with_embeddings.get_top_k_outputs(
             query_embeddings=query_embeddings,
@@ -193,9 +178,7 @@ class TestTopKRetrieval:
         k = 15
 
         query_embeddings = torch.randn(B, 32)
-        query_embeddings = query_embeddings / query_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        query_embeddings = query_embeddings / query_embeddings.norm(dim=-1, keepdim=True)
 
         _, top_k_scores = index_with_embeddings.get_top_k_outputs(
             query_embeddings=query_embeddings,
@@ -205,9 +188,7 @@ class TestTopKRetrieval:
         # Check that scores are sorted (descending)
         for i in range(B):
             scores = top_k_scores[i]
-            assert torch.all(
-                scores[:-1] >= scores[1:]
-            ), f"Scores not sorted for batch {i}"
+            assert torch.all(scores[:-1] >= scores[1:]), f"Scores not sorted for batch {i}"
 
     def test_top_k_with_invalid_ids_filtering(self, index_with_embeddings):
         """Test that invalid IDs are filtered from results."""
@@ -216,9 +197,7 @@ class TestTopKRetrieval:
         num_invalid = 5
 
         query_embeddings = torch.randn(B, 32)
-        query_embeddings = query_embeddings / query_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        query_embeddings = query_embeddings / query_embeddings.norm(dim=-1, keepdim=True)
 
         # Create invalid IDs (these should be excluded from results)
         invalid_ids = torch.randint(1, 101, (B, num_invalid))
@@ -232,9 +211,7 @@ class TestTopKRetrieval:
         # Check that no invalid IDs appear in results
         for b in range(B):
             for invalid_id in invalid_ids[b]:
-                assert (
-                    invalid_id not in top_k_ids[b]
-                ), f"Invalid ID {invalid_id} found in results for batch {b}"
+                assert invalid_id not in top_k_ids[b], f"Invalid ID {invalid_id} found in results for batch {b}"
 
 
 # =============================================================================
@@ -252,26 +229,14 @@ class TestCandidateIndexSync:
         data_config = deepcopy(debug_cfg.data)
 
         cwd = os.getcwd()
-        model_config.preprocessor.feature_counts = os.path.join(
-            cwd, "user_data/processed/feature_counts.json"
-        )
-        data_config.train_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_train.csv"
-        )
-        data_config.test_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_test.csv"
-        )
-        data_config.embedding_file = os.path.join(
-            cwd, "user_data/processed/article_embedding.pt"
-        )
+        model_config.preprocessor.feature_counts = os.path.join(cwd, "user_data/processed/feature_counts.json")
+        data_config.train_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_train.csv")
+        data_config.test_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_test.csv")
+        data_config.embedding_file = os.path.join(cwd, "user_data/processed/article_embedding.pt")
         data_config.data_preprocessor.data_dir = os.path.join(cwd, "tcdata")
-        data_config.data_preprocessor.output_dir = os.path.join(
-            cwd, "user_data/processed"
-        )
+        data_config.data_preprocessor.output_dir = os.path.join(cwd, "user_data/processed")
 
-        return hydra.utils.instantiate(
-            model_config, datamodule=data_config, _recursive_=False
-        )
+        return hydra.utils.instantiate(model_config, datamodule=data_config, _recursive_=False)
 
     def test_initial_candidate_embeddings_none(self, model):
         """Test that candidate index starts with no embeddings."""
@@ -301,21 +266,21 @@ class TestCandidateIndexSync:
         item_embeddings = item_emb_module.weight[1:]  # [num_items, D]
 
         # Normalize (as done in _update_candidate_embeddings via negative_sampler.normalize_embeddings)
-        normalized_item_embeddings = item_embeddings / item_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        normalized_item_embeddings = item_embeddings / item_embeddings.norm(dim=-1, keepdim=True)
 
-        # Get candidate embeddings
-        candidate_embeddings = model.candidate_index.embeddings  # [num_items, D]
+        # Get candidate embeddings (shape is [1, num_items, D])
+        candidate_embeddings = model.candidate_index.embeddings
+        # Squeeze to [num_items, D] for comparison
+        candidate_embeddings_squeezed = candidate_embeddings.squeeze(0)
 
         # They should match
-        assert (
-            candidate_embeddings.shape == normalized_item_embeddings.shape
-        ), f"Shape mismatch: {candidate_embeddings.shape} vs {normalized_item_embeddings.shape}"
+        assert candidate_embeddings_squeezed.shape == normalized_item_embeddings.shape, (
+            f"Shape mismatch: {candidate_embeddings_squeezed.shape} vs {normalized_item_embeddings.shape}"
+        )
 
-        assert torch.allclose(
-            candidate_embeddings, normalized_item_embeddings, atol=1e-5
-        ), "Candidate embeddings do not match normalized item embeddings"
+        assert torch.allclose(candidate_embeddings_squeezed, normalized_item_embeddings, atol=1e-5), (
+            "Candidate embeddings do not match normalized item embeddings"
+        )
 
     def test_embeddings_update_after_training_step(self, model, fake_batch):
         """Test that embeddings are properly synchronized after a training step modifies weights."""
@@ -337,22 +302,20 @@ class TestCandidateIndexSync:
         updated_candidate_emb = model.candidate_index.embeddings
 
         # Embeddings should have changed
-        assert not torch.allclose(
-            initial_candidate_emb, updated_candidate_emb, atol=1e-6
-        ), "Candidate embeddings did not update after item embedding modification"
+        assert not torch.allclose(initial_candidate_emb, updated_candidate_emb, atol=1e-6), (
+            "Candidate embeddings did not update after item embedding modification"
+        )
 
     def test_candidate_ids_match_all_item_ids(self, model):
         """Test that candidate index IDs match all item IDs from preprocessor."""
         all_item_ids = model.preprocessor.get_all_item_ids()
         candidate_ids = model.candidate_index.ids.squeeze(0).tolist()
 
-        assert len(candidate_ids) == len(
-            all_item_ids
-        ), f"ID count mismatch: {len(candidate_ids)} vs {len(all_item_ids)}"
+        assert len(candidate_ids) == len(all_item_ids), (
+            f"ID count mismatch: {len(candidate_ids)} vs {len(all_item_ids)}"
+        )
 
-        assert set(candidate_ids) == set(
-            all_item_ids
-        ), "Candidate IDs do not match all item IDs"
+        assert set(candidate_ids) == set(all_item_ids), "Candidate IDs do not match all item IDs"
 
 
 # =============================================================================
@@ -370,26 +333,14 @@ class TestRetrievalWithSync:
         data_config = deepcopy(debug_cfg.data)
 
         cwd = os.getcwd()
-        model_config.preprocessor.feature_counts = os.path.join(
-            cwd, "user_data/processed/feature_counts.json"
-        )
-        data_config.train_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_train.csv"
-        )
-        data_config.test_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_test.csv"
-        )
-        data_config.embedding_file = os.path.join(
-            cwd, "user_data/processed/article_embedding.pt"
-        )
+        model_config.preprocessor.feature_counts = os.path.join(cwd, "user_data/processed/feature_counts.json")
+        data_config.train_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_train.csv")
+        data_config.test_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_test.csv")
+        data_config.embedding_file = os.path.join(cwd, "user_data/processed/article_embedding.pt")
         data_config.data_preprocessor.data_dir = os.path.join(cwd, "tcdata")
-        data_config.data_preprocessor.output_dir = os.path.join(
-            cwd, "user_data/processed"
-        )
+        data_config.data_preprocessor.output_dir = os.path.join(cwd, "user_data/processed")
 
-        return hydra.utils.instantiate(
-            model_config, datamodule=data_config, _recursive_=False
-        )
+        return hydra.utils.instantiate(model_config, datamodule=data_config, _recursive_=False)
 
     def test_retrieve_returns_valid_results(self, model, debug_cfg, fake_batch):
         """Test that retrieve returns valid top-k results."""
@@ -398,9 +349,7 @@ class TestRetrievalWithSync:
         model.eval()
 
         max_output_length = debug_cfg.model.gr_output_length + 1
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         k = 10
         top_k_ids, top_k_scores = model.retrieve(
@@ -423,9 +372,7 @@ class TestRetrievalWithSync:
         model.eval()
 
         max_output_length = debug_cfg.model.gr_output_length + 1
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         k = 10
         top_k_ids, _ = model.retrieve(
@@ -442,9 +389,7 @@ class TestRetrievalWithSync:
             retrieved_ids_set = set(top_k_ids[b].tolist())
 
             overlap = past_ids_set & retrieved_ids_set
-            assert (
-                len(overlap) == 0
-            ), f"Batch {b}: Found {len(overlap)} past IDs in retrieval results"
+            assert len(overlap) == 0, f"Batch {b}: Found {len(overlap)} past IDs in retrieval results"
 
     def test_retrieve_no_filter_includes_past_ids(self, model, debug_cfg, fake_batch):
         """Test that retrieve without filtering may include past IDs."""
@@ -453,9 +398,7 @@ class TestRetrievalWithSync:
         model.eval()
 
         max_output_length = debug_cfg.model.gr_output_length + 1
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         k = 50  # Large k to increase chance of overlap
         top_k_ids, _ = model.retrieve(
@@ -483,26 +426,14 @@ class TestEpochHooksSync:
         data_config = deepcopy(debug_cfg.data)
 
         cwd = os.getcwd()
-        model_config.preprocessor.feature_counts = os.path.join(
-            cwd, "user_data/processed/feature_counts.json"
-        )
-        data_config.train_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_train.csv"
-        )
-        data_config.test_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_test.csv"
-        )
-        data_config.embedding_file = os.path.join(
-            cwd, "user_data/processed/article_embedding.pt"
-        )
+        model_config.preprocessor.feature_counts = os.path.join(cwd, "user_data/processed/feature_counts.json")
+        data_config.train_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_train.csv")
+        data_config.test_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_test.csv")
+        data_config.embedding_file = os.path.join(cwd, "user_data/processed/article_embedding.pt")
         data_config.data_preprocessor.data_dir = os.path.join(cwd, "tcdata")
-        data_config.data_preprocessor.output_dir = os.path.join(
-            cwd, "user_data/processed"
-        )
+        data_config.data_preprocessor.output_dir = os.path.join(cwd, "user_data/processed")
 
-        return hydra.utils.instantiate(
-            model_config, datamodule=data_config, _recursive_=False
-        )
+        return hydra.utils.instantiate(model_config, datamodule=data_config, _recursive_=False)
 
     def test_on_validation_epoch_start_updates_embeddings(self, model):
         """Test that on_validation_epoch_start updates candidate embeddings."""

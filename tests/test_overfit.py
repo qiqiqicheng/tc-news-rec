@@ -1,10 +1,10 @@
-import pytest
-import hydra
-import torch
-import lightning as L
-from omegaconf import DictConfig, OmegaConf, open_dict
 import os
 from copy import deepcopy
+
+import hydra
+import lightning as L
+import torch
+from omegaconf import DictConfig, open_dict
 
 
 def _test_overfitting(debug_cfg: DictConfig):
@@ -17,9 +17,7 @@ def _test_overfitting(debug_cfg: DictConfig):
 
     # --- Path Setup (Fixing Hydra Interpolation) ---
     feature_count_file = os.path.join(cwd, "user_data/processed/feature_counts.json")
-    train_file = os.path.join(
-        cwd, "user_data/processed/sasrec_format_by_user_train.csv"
-    )
+    train_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_train.csv")
     test_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_test.csv")
     embedding_file = os.path.join(cwd, "user_data/processed/article_embedding.pt")
     data_file = os.path.join(cwd, "tcdata")
@@ -34,13 +32,19 @@ def _test_overfitting(debug_cfg: DictConfig):
 
     cfg.paths.output_dir = os.path.join(cwd, "logs/test_overfit")
     cfg.paths.work_dir = cwd
-    
 
     # --- Overfitting Configuration ---
     # Use a single batch for training and validation
     with open_dict(cfg.trainer):
         cfg.trainer.overfit_batches = 1
         cfg.trainer.log_every_n_steps = 1
+
+    print(f"accelerator: {cfg.trainer.accelerator}")
+    print(f"device: {cfg.trainer.devices}")
+    print(f"sys CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES')}")
+    print(f"PyTorch visible GPU: {torch.cuda.device_count()}")
+    for i in range(torch.cuda.device_count()):
+        print(f"logical index {i} -> {torch.cuda.get_device_name(i)}")
 
     # Train long enough to converge
     cfg.trainer.max_epochs = 100
@@ -57,7 +61,7 @@ def _test_overfitting(debug_cfg: DictConfig):
     # Ensure we are on CPU for this small test (or GPU if available, but let's stick to config)
     cfg.trainer.accelerator = "gpu"
     cfg.trainer.devices = [6]
-    
+
     # # --- AdamW Optimizer Configuration ---
     # # Use AdamW with a high learning rate for overfitting
     # cfg.model.optimizer = {
@@ -84,17 +88,13 @@ def _test_overfitting(debug_cfg: DictConfig):
     # 1. Loss should be low
     train_loss = metrics.get("train/loss")
     assert train_loss is not None, "train/loss not found in metrics"
-    assert (
-        train_loss < 0.5
-    ), f"Training loss {train_loss} is too high. Model failed to overfit."
+    assert train_loss < 0.5, f"Training loss {train_loss} is too high. Model failed to overfit."
 
     # 2. Hit Rate should be high (ideally 1.0)
     # Note: We use val/hr@5 because that's what we monitor
     val_hr = metrics.get("val/hr@5")
     assert val_hr is not None, "val/hr@5 not found in metrics"
-    assert (
-        val_hr > 0.8
-    ), f"Validation HR@5 {val_hr} is too low. Model failed to memorize the batch."
+    assert val_hr > 0.8, f"Validation HR@5 {val_hr} is too low. Model failed to memorize the batch."
 
     # 3. NDCG should be high
     val_ndcg = metrics.get("val/ndcg@5")
@@ -103,7 +103,7 @@ def _test_overfitting(debug_cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    from hydra import initialize, compose
+    from hydra import compose, initialize
 
     with initialize(config_path="../configs", version_base=None):
         cfg = compose(config_name="train", overrides=["debug=default"])

@@ -1,29 +1,18 @@
-"""
-Test suite for negative sampling validity in the recommendation model.
-
-This module tests:
-1. GlobalNegativeSampler correctness
-2. Negative sample exclusion (negatives should not equal positives)
-3. L2 normalization consistency between positive and negative embeddings
-4. Sampling distribution and coverage
-5. Integration with loss computation
-"""
-
-import pytest
-import torch
-import hydra
 import os
 from copy import deepcopy
+
+import hydra
+import pytest
+import torch
 from omegaconf import DictConfig, OmegaConf
 
+from tc_news_rec.models.losses.losses import SampledSoftmaxLoss
 from tc_news_rec.models.negative_samplers.negative_samplers import (
     GlobalNegativeSampler,
-    InBatchNegativesSampler,
     NegativeSampler,
 )
-from tc_news_rec.models.utils.features import get_sequential_features
-from tc_news_rec.models.losses.losses import SampledSoftmaxLoss
 from tc_news_rec.models.similarity.similarity import DotProductSimilarity
+from tc_news_rec.models.utils.features import get_sequential_features
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -91,13 +80,13 @@ class TestGlobalNegativeSampler:
             B,
             L,
             num_to_sample,
-        ), f"neg_ids shape mismatch for 2D input"
+        ), "neg_ids shape mismatch for 2D input"
         assert neg_embeddings.shape == (
             B,
             L,
             num_to_sample,
             64,
-        ), f"neg_embeddings shape mismatch for 2D input"
+        ), "neg_embeddings shape mismatch for 2D input"
 
     def _test_negative_ids_in_valid_range(self, sampler, embedding_table):
         """Test that all negative IDs are within valid item ID range."""
@@ -134,9 +123,9 @@ class TestGlobalNegativeSampler:
         # Check L2 norm of embeddings
         norms = torch.linalg.norm(neg_embeddings, dim=-1)
 
-        assert torch.allclose(
-            norms, torch.ones_like(norms), atol=1e-5
-        ), f"Embeddings not L2 normalized. Norms range: [{norms.min():.4f}, {norms.max():.4f}]"
+        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5), (
+            f"Embeddings not L2 normalized. Norms range: [{norms.min():.4f}, {norms.max():.4f}]"
+        )
 
     def _test_l2_normalization_disabled(self, embedding_table):
         """Test that L2 normalization is not applied when disabled."""
@@ -158,9 +147,9 @@ class TestGlobalNegativeSampler:
         norms = torch.linalg.norm(neg_embeddings, dim=-1)
 
         # With random embeddings, it's highly unlikely all norms are exactly 1
-        assert not torch.allclose(
-            norms, torch.ones_like(norms), atol=1e-5
-        ), "Embeddings appear normalized when l2_normalize=False"
+        assert not torch.allclose(norms, torch.ones_like(norms), atol=1e-5), (
+            "Embeddings appear normalized when l2_normalize=False"
+        )
 
 
 # =============================================================================
@@ -200,9 +189,9 @@ class TestNegativeSamplingExclusion:
         expected_rate = num_to_sample / num_items
 
         # Allow 2x expected rate due to randomness
-        assert (
-            collision_rate < expected_rate * 2
-        ), f"Collision rate {collision_rate:.4f} too high (expected ~{expected_rate:.4f})"
+        assert collision_rate < expected_rate * 2, (
+            f"Collision rate {collision_rate:.4f} too high (expected ~{expected_rate:.4f})"
+        )
 
     def _test_loss_handles_collisions(self):
         """
@@ -220,15 +209,11 @@ class TestNegativeSamplingExclusion:
         num_to_sample = 10
 
         output_embeddings = torch.randn(T, D)
-        output_embeddings = output_embeddings / output_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        output_embeddings = output_embeddings / output_embeddings.norm(dim=-1, keepdim=True)
 
         supervision_ids = torch.tensor([1, 2, 3, 4, 5])
         supervision_embeddings = torch.randn(T, D)
-        supervision_embeddings = supervision_embeddings / supervision_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        supervision_embeddings = supervision_embeddings / supervision_embeddings.norm(dim=-1, keepdim=True)
         supervision_weights = torch.ones(T)
 
         # Create mock negative sampler that intentionally creates collisions
@@ -239,9 +224,7 @@ class TestNegativeSamplingExclusion:
                 neg_ids = torch.randint(1, 100, (B, num_to_sample))
                 neg_ids[:, 0] = positive_item_ids  # force collision
                 neg_embeddings = torch.randn(B, num_to_sample, D)
-                neg_embeddings = neg_embeddings / neg_embeddings.norm(
-                    dim=-1, keepdim=True
-                )
+                neg_embeddings = neg_embeddings / neg_embeddings.norm(dim=-1, keepdim=True)
                 return neg_ids, neg_embeddings
 
         mock_sampler = MockSamplerWithCollisions()
@@ -275,37 +258,21 @@ class TestNormalizationConsistency:
         data_config = deepcopy(debug_cfg.data)
 
         cwd = os.getcwd()
-        model_config.preprocessor.feature_counts = os.path.join(
-            cwd, "user_data/processed/feature_counts.json"
-        )
-        data_config.train_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_train.csv"
-        )
-        data_config.test_file = os.path.join(
-            cwd, "user_data/processed/sasrec_format_by_user_test.csv"
-        )
-        data_config.embedding_file = os.path.join(
-            cwd, "user_data/processed/article_embedding.pt"
-        )
+        model_config.preprocessor.feature_counts = os.path.join(cwd, "user_data/processed/feature_counts.json")
+        data_config.train_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_train.csv")
+        data_config.test_file = os.path.join(cwd, "user_data/processed/sasrec_format_by_user_test.csv")
+        data_config.embedding_file = os.path.join(cwd, "user_data/processed/article_embedding.pt")
         data_config.data_preprocessor.data_dir = os.path.join(cwd, "tcdata")
-        data_config.data_preprocessor.output_dir = os.path.join(
-            cwd, "user_data/processed"
-        )
+        data_config.data_preprocessor.output_dir = os.path.join(cwd, "user_data/processed")
 
-        return hydra.utils.instantiate(
-            model_config, datamodule=data_config, _recursive_=False
-        )
+        return hydra.utils.instantiate(model_config, datamodule=data_config, _recursive_=False)
 
-    def _test_output_embeddings_are_normalized(
-        self, model, debug_cfg: DictConfig, fake_batch
-    ):
+    def _test_output_embeddings_are_normalized(self, model, debug_cfg: DictConfig, fake_batch):
         """Test that model output embeddings are L2 normalized."""
         device = torch.device("cpu")
         max_output_length = debug_cfg.model.gr_output_length + 1
 
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         seq_features.past_ids.scatter_(
             dim=1,
@@ -322,13 +289,11 @@ class TestNormalizationConsistency:
         B, N, D = encoded_embeddings.shape
         for b in range(B):
             valid_norms = norms[b, : valid_lengths[b]]
-            assert torch.allclose(
-                valid_norms, torch.ones_like(valid_norms), atol=1e-5
-            ), f"Sample {b}: Output embeddings not normalized. Norms: {valid_norms}"
+            assert torch.allclose(valid_norms, torch.ones_like(valid_norms), atol=1e-5), (
+                f"Sample {b}: Output embeddings not normalized. Norms: {valid_norms}"
+            )
 
-    def _test_positive_negative_normalization_match(
-        self, model, debug_cfg: DictConfig, fake_batch
-    ):
+    def _test_positive_negative_normalization_match(self, model, debug_cfg: DictConfig, fake_batch):
         """
         Test that positive and negative embeddings have consistent normalization.
 
@@ -338,9 +303,7 @@ class TestNormalizationConsistency:
         device = torch.device("cpu")
         max_output_length = debug_cfg.model.gr_output_length + 1
 
-        seq_features, target_ids = get_sequential_features(
-            fake_batch, device, max_output_length
-        )
+        seq_features, target_ids = get_sequential_features(fake_batch, device, max_output_length)
 
         seq_features.past_ids.scatter_(
             dim=1,
@@ -353,24 +316,18 @@ class TestNormalizationConsistency:
         supervision_embeddings = model.preprocessor.get_embedding_by_id(supervision_ids)
 
         # Set up negative sampler
-        model.negative_sampler.set_item_embedding(
-            model.preprocessor.get_item_id_embedding_module()
-        )
-        model.negative_sampler.set_all_item_ids(
-            model.preprocessor.get_all_item_ids(), device=device
-        )
+        model.negative_sampler.set_item_embedding(model.preprocessor.get_item_id_embedding_module())
+        model.negative_sampler.set_all_item_ids(model.preprocessor.get_all_item_ids(), device=device)
 
         # Get negative embeddings
         # Use reshape instead of view because supervision_ids may not be contiguous after slicing
-        neg_ids, neg_embeddings = model.negative_sampler(
-            supervision_ids.reshape(-1), num_to_sample=64
-        )
+        neg_ids, neg_embeddings = model.negative_sampler(supervision_ids.reshape(-1), num_to_sample=64)
 
         # Check normalization of negatives
         neg_norms = torch.linalg.norm(neg_embeddings, dim=-1)
-        assert torch.allclose(
-            neg_norms, torch.ones_like(neg_norms), atol=1e-5
-        ), f"Negative embeddings not normalized. Norms range: [{neg_norms.min():.4f}, {neg_norms.max():.4f}]"
+        assert torch.allclose(neg_norms, torch.ones_like(neg_norms), atol=1e-5), (
+            f"Negative embeddings not normalized. Norms range: [{neg_norms.min():.4f}, {neg_norms.max():.4f}]"
+        )
 
         # Check normalization of positives - NOTE: these may NOT be normalized
         # This is a potential issue identified in the original analysis
@@ -382,13 +339,11 @@ class TestNormalizationConsistency:
             torch.ones_like(pos_norms[pos_norms > 0]),
             atol=0.1,
         ):
-            print(f"WARNING: Positive embeddings may not be L2 normalized!")
+            print("WARNING: Positive embeddings may not be L2 normalized!")
             print(
                 f"  Positive norms range: [{pos_norms[pos_norms > 0].min():.4f}, {pos_norms[pos_norms > 0].max():.4f}]"
             )
-            print(
-                f"  Negative norms range: [{neg_norms.min():.4f}, {neg_norms.max():.4f}]"
-            )
+            print(f"  Negative norms range: [{neg_norms.min():.4f}, {neg_norms.max():.4f}]")
 
 
 # =============================================================================
@@ -428,12 +383,12 @@ class TestSamplingDistribution:
         assert (counts > 0).all(), "Some items were never sampled"
 
         # Check that distribution is roughly uniform (within 3x of expected)
-        assert (
-            counts.max() < expected_per_item * 3
-        ), f"Max count {counts.max()} is too high (expected ~{expected_per_item:.0f})"
-        assert (
-            counts.min() > expected_per_item / 3
-        ), f"Min count {counts.min()} is too low (expected ~{expected_per_item:.0f})"
+        assert counts.max() < expected_per_item * 3, (
+            f"Max count {counts.max()} is too high (expected ~{expected_per_item:.0f})"
+        )
+        assert counts.min() > expected_per_item / 3, (
+            f"Min count {counts.min()} is too low (expected ~{expected_per_item:.0f})"
+        )
 
     def _test_no_padding_idx_sampled(self):
         """Test that padding index (0) is never sampled."""
@@ -476,9 +431,7 @@ class TestNegativeSamplingLossIntegration:
 
         # Create perfectly aligned output and positive embeddings
         output_embeddings = torch.randn(T, D)
-        output_embeddings = output_embeddings / output_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        output_embeddings = output_embeddings / output_embeddings.norm(dim=-1, keepdim=True)
 
         # Positive embeddings are same as output (perfect model)
         supervision_embeddings = output_embeddings.clone()
@@ -491,9 +444,7 @@ class TestNegativeSamplingLossIntegration:
                 B = positive_item_ids.shape[0]
                 neg_ids = torch.randint(100, 1000, (B, num_to_sample))
                 neg_embeddings = torch.randn(B, num_to_sample, D)
-                neg_embeddings = neg_embeddings / neg_embeddings.norm(
-                    dim=-1, keepdim=True
-                )
+                neg_embeddings = neg_embeddings / neg_embeddings.norm(dim=-1, keepdim=True)
                 return neg_ids, neg_embeddings
 
         mock_sampler = MockRandomNegativeSampler()
@@ -524,15 +475,11 @@ class TestNegativeSamplingLossIntegration:
 
         # Random output embeddings
         output_embeddings = torch.randn(T, D)
-        output_embeddings = output_embeddings / output_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        output_embeddings = output_embeddings / output_embeddings.norm(dim=-1, keepdim=True)
 
         # Different random positive embeddings
         supervision_embeddings = torch.randn(T, D)
-        supervision_embeddings = supervision_embeddings / supervision_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        supervision_embeddings = supervision_embeddings / supervision_embeddings.norm(dim=-1, keepdim=True)
         supervision_ids = torch.arange(1, T + 1)
         supervision_weights = torch.ones(T)
 
@@ -541,9 +488,7 @@ class TestNegativeSamplingLossIntegration:
                 B = positive_item_ids.shape[0]
                 neg_ids = torch.randint(100, 1000, (B, num_to_sample))
                 neg_embeddings = torch.randn(B, num_to_sample, D)
-                neg_embeddings = neg_embeddings / neg_embeddings.norm(
-                    dim=-1, keepdim=True
-                )
+                neg_embeddings = neg_embeddings / neg_embeddings.norm(dim=-1, keepdim=True)
                 return neg_ids, neg_embeddings
 
         mock_sampler = MockRandomNegativeSampler()
@@ -570,14 +515,10 @@ class TestNegativeSamplingLossIntegration:
         D = 16
 
         output_embeddings = torch.randn(T, D, requires_grad=True)
-        normalized_output = output_embeddings / output_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        normalized_output = output_embeddings / output_embeddings.norm(dim=-1, keepdim=True)
 
         supervision_embeddings = torch.randn(T, D)
-        supervision_embeddings = supervision_embeddings / supervision_embeddings.norm(
-            dim=-1, keepdim=True
-        )
+        supervision_embeddings = supervision_embeddings / supervision_embeddings.norm(dim=-1, keepdim=True)
         supervision_ids = torch.arange(1, T + 1)
         supervision_weights = torch.ones(T)
 
@@ -586,9 +527,7 @@ class TestNegativeSamplingLossIntegration:
                 B = positive_item_ids.shape[0]
                 neg_ids = torch.randint(100, 1000, (B, num_to_sample))
                 neg_embeddings = torch.randn(B, num_to_sample, D)
-                neg_embeddings = neg_embeddings / neg_embeddings.norm(
-                    dim=-1, keepdim=True
-                )
+                neg_embeddings = neg_embeddings / neg_embeddings.norm(dim=-1, keepdim=True)
                 return neg_ids, neg_embeddings
 
         mock_sampler = MockSampler()
