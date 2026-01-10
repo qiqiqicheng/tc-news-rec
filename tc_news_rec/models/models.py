@@ -1,39 +1,33 @@
-from typing import Optional, Any, Dict, Literal, Tuple
+import abc
+from typing import Any, Dict, Literal, Tuple
+
 import hydra
-from omegaconf import DictConfig
+import lightning as L
 import torch
 import torchmetrics
-import torch.nn.functional as F
-import lightning as L
-import abc
+from omegaconf import DictConfig
 
-from tc_news_rec.utils.logger import RankedLogger
-from tc_news_rec.data.tc_dataset import TCDataset, TCDataModule
-from tc_news_rec.models.embeddings import LocalEmbeddingModule, EmbeddingModule
-from tc_news_rec.models.similarity.similarity import NDPModule, DotProductSimilarity
-from tc_news_rec.models.losses.losses import AutoregressiveLoss, SampledSoftmaxLoss
+import tc_news_rec.models.utils.ops as ops
+from tc_news_rec.data.tc_dataset import TCDataModule
+from tc_news_rec.models.indexing.candidate_index import CandidateIndex
+from tc_news_rec.models.losses.losses import AutoregressiveLoss
 from tc_news_rec.models.negative_samplers.negative_samplers import (
     GlobalNegativeSampler,
-    NegativeSampler,
     InBatchNegativesSampler,
-)
-from tc_news_rec.models.sequential_encoders.hstu import HSTU
-from tc_news_rec.models.preprocessors.preprocessors import (
-    InputPreprocessor,
-    AllEmbeddingsInputPreprocessor,
+    NegativeSampler,
 )
 from tc_news_rec.models.postprocessors.postprocessors import (
     OutputPostprocessorModule,
-    L2NormEmbeddingPostprocessor,
-    LayerNormEmbeddingPostprocessor,
 )
+from tc_news_rec.models.preprocessors.preprocessors import (
+    InputPreprocessor,
+)
+from tc_news_rec.models.similarity.similarity import NDPModule
 from tc_news_rec.models.utils.features import (
     SequentialFeatures,
     get_sequential_features,
 )
-import tc_news_rec.models.utils.ops as ops
-from tc_news_rec.models.indexing.candidate_index import CandidateIndex
-from tc_news_rec.models.metrics.retrieval_metrics import RetrievalMetrics
+from tc_news_rec.utils.logger import RankedLogger
 
 log = RankedLogger(__name__)
 
@@ -64,14 +58,10 @@ class BaseRecommender(L.LightningModule):
         self.k = k
 
         self.optimizer: torch.optim.Optimizer = (
-            hydra.utils.instantiate(optimizer)
-            if isinstance(optimizer, DictConfig)
-            else optimizer
+            hydra.utils.instantiate(optimizer) if isinstance(optimizer, DictConfig) else optimizer
         )
         self.scheduler: torch.optim.lr_scheduler.LRScheduler = (
-            hydra.utils.instantiate(scheduler)
-            if isinstance(scheduler, DictConfig)
-            else scheduler
+            hydra.utils.instantiate(scheduler) if isinstance(scheduler, DictConfig) else scheduler
         )
 
         self.configure_optimizer_params: DictConfig = configure_optimizer_params
@@ -106,9 +96,7 @@ class BaseRecommender(L.LightningModule):
     ) -> None:
         # TODO: check it carefully later
         self.datamodule: TCDataModule = (
-            hydra.utils.instantiate(datamodule, _recursive_=False)
-            if isinstance(datamodule, DictConfig)
-            else datamodule
+            hydra.utils.instantiate(datamodule, _recursive_=False) if isinstance(datamodule, DictConfig) else datamodule
         )
 
         self.preprocessor: InputPreprocessor = (
@@ -130,9 +118,7 @@ class BaseRecommender(L.LightningModule):
         )
 
         self.similarity: NDPModule = (
-            hydra.utils.instantiate(similarity)
-            if isinstance(similarity, DictConfig)
-            else similarity
+            hydra.utils.instantiate(similarity) if isinstance(similarity, DictConfig) else similarity
         )
 
         self.negative_sampler: NegativeSampler = (
@@ -142,30 +128,20 @@ class BaseRecommender(L.LightningModule):
         )
 
         self.loss_fn: AutoregressiveLoss = (
-            hydra.utils.instantiate(loss, _recursive_=False)
-            if isinstance(loss, DictConfig)
-            else loss
+            hydra.utils.instantiate(loss, _recursive_=False) if isinstance(loss, DictConfig) else loss
         )
 
         if isinstance(candidate_index, DictConfig):
-            all_ids = (
-                torch.Tensor(self.preprocessor.get_all_item_ids()).view(1, -1).long()
-            )
-            self.candidate_index = hydra.utils.instantiate(
-                candidate_index, ids=all_ids, _recursive_=False
-            )
+            all_ids = torch.Tensor(self.preprocessor.get_all_item_ids()).view(1, -1).long()
+            self.candidate_index = hydra.utils.instantiate(candidate_index, ids=all_ids, _recursive_=False)
         else:
             raise ValueError("candidate_index must be a DictConfig")
 
         self.metrics: torchmetrics.Metric = (
-            hydra.utils.instantiate(metrics, _recursive_=False)
-            if isinstance(metrics, DictConfig)
-            else metrics
+            hydra.utils.instantiate(metrics, _recursive_=False) if isinstance(metrics, DictConfig) else metrics
         )
 
-    def setup(
-        self, stage: Literal["fit", "validate", "test", "predict"] | None = None
-    ) -> None:
+    def setup(self, stage: Literal["fit", "validate", "test", "predict"] | None = None) -> None:
         # TODO: understand this
         if self.compile_model and stage == "fit":
             self.net = torch.compile(self.net)
@@ -186,17 +162,10 @@ class BaseRecommender(L.LightningModule):
         if self.scheduler is not None:
             scheduler_kwargs = {}
             # If the scheduler is OneCycleLR, we need to pass total_steps
-            if (
-                hasattr(self.scheduler, "func")
-                and self.scheduler.func == torch.optim.lr_scheduler.OneCycleLR
-            ):
-                scheduler_kwargs["total_steps"] = (
-                    self.trainer.estimated_stepping_batches
-                )
+            if hasattr(self.scheduler, "func") and self.scheduler.func == torch.optim.lr_scheduler.OneCycleLR:
+                scheduler_kwargs["total_steps"] = self.trainer.estimated_stepping_batches
 
-            scheduler = self.scheduler(
-                optimizer=optimizer, **scheduler_kwargs
-            )  # type: ignore
+            scheduler = self.scheduler(optimizer=optimizer, **scheduler_kwargs)  # type: ignore
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {
@@ -209,7 +178,9 @@ class BaseRecommender(L.LightningModule):
     def state_dict(self, destination=None, prefix="", keep_vars=False):
         # Call the superclass's state_dict method to get the full state dictionary
         state_dict = super().state_dict(
-            destination=destination, prefix=prefix, keep_vars=keep_vars  # type: ignore
+            destination=destination,
+            prefix=prefix,
+            keep_vars=keep_vars,  # type: ignore
         )
 
         # List of module names you don't want to save
@@ -238,9 +209,7 @@ class BaseRecommender(L.LightningModule):
         super().load_state_dict(state_dict, strict=False)
 
     @abc.abstractmethod
-    def forward(
-        self, seq_features: SequentialFeatures
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, seq_features: SequentialFeatures) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Lightning calls this inside the training loop
 
@@ -255,9 +224,7 @@ class BaseRecommender(L.LightningModule):
         pass
 
     @abc.abstractmethod
-    def training_step(
-        self, batch: Dict[str, torch.Tensor], batch_idx: int
-    ) -> torch.Tensor:
+    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """
         Args:
             batch (Dict[str, torch.Tensor]): _description_
@@ -284,9 +251,7 @@ class BaseRecommender(L.LightningModule):
     ) -> Any:
         pass
 
-    def dense_to_jagged(
-        self, lengths: torch.Tensor, **kwargs
-    ) -> dict[str, torch.Tensor]:
+    def dense_to_jagged(self, lengths: torch.Tensor, **kwargs) -> dict[str, torch.Tensor]:
         """
         Convert dense tensor to jagged tensor.
 
@@ -319,9 +284,7 @@ class BaseRecommender(L.LightningModule):
 
 
 class RetreivalModel(BaseRecommender):
-    def forward(
-        self, seq_features: SequentialFeatures
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, seq_features: SequentialFeatures) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Lightning calls this inside the training loop
 
@@ -366,9 +329,7 @@ class RetreivalModel(BaseRecommender):
         item_emb_module = self.preprocessor.get_item_id_embedding_module()
         embeddings = item_emb_module.weight[1:].unsqueeze(0)  # [1, N, D]
 
-        self.candidate_index.update_embeddings(
-            self.negative_sampler.normalize_embeddings(embeddings)
-        )
+        self.candidate_index.update_embeddings(self.negative_sampler.normalize_embeddings(embeddings))
 
     @torch.inference_mode()
     def retrieve(
@@ -389,14 +350,10 @@ class RetreivalModel(BaseRecommender):
         """
         encoded_embeddings, valid_lengths, _ = self.forward(seq_features)
         # Use valid_lengths returned from forward() for correct position indexing
-        current_embeddings = ops.get_current_embeddings(
-            valid_lengths, encoded_embeddings
-        )
+        current_embeddings = ops.get_current_embeddings(valid_lengths, encoded_embeddings)
 
         if self.candidate_index.embeddings is None:
-            log.info(
-                "Initializing candidate index embeddings with current item embeddings"
-            )
+            log.info("Initializing candidate index embeddings with current item embeddings")
             self._update_candidate_embeddings()
 
         top_k_ids, top_k_scores = self.candidate_index.get_top_k_outputs(
@@ -406,9 +363,7 @@ class RetreivalModel(BaseRecommender):
         )
         return top_k_ids, top_k_scores
 
-    def training_step(
-        self, batch: Dict[str, torch.Tensor], batch_idx: int
-    ) -> torch.Tensor:
+    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         seq_features, target_ids = get_sequential_features(
             batch, device=self.device, max_output_length=self.gr_output_length + 1
         )
@@ -435,9 +390,7 @@ class RetreivalModel(BaseRecommender):
                 embeddings=self.preprocessor.get_embedding_by_id(in_batch_ids),
             )
         elif isinstance(self.negative_sampler, GlobalNegativeSampler):
-            self.negative_sampler.set_item_embedding(
-                self.preprocessor.get_item_id_embedding_module()
-            )
+            self.negative_sampler.set_item_embedding(self.preprocessor.get_item_id_embedding_module())
             self.negative_sampler.set_all_item_ids(
                 self.preprocessor.get_all_item_ids(), device=encoded_embeddings.device
             )
@@ -456,20 +409,14 @@ class RetreivalModel(BaseRecommender):
 
         # Shift supervision_ids by 1 to get next-item targets
         # output_embeddings[i] should predict supervision_ids[i] = all_ids[i+1]
-        supervision_ids = all_ids[
-            :, 1:
-        ]  # [B, N-1] - the target for each output position
-        output_embeddings_for_loss = encoded_embeddings[
-            :, :-1, :
-        ]  # [B, N-1, D] - exclude last position
+        supervision_ids = all_ids[:, 1:]  # [B, N-1] - the target for each output position
+        output_embeddings_for_loss = encoded_embeddings[:, :-1, :]  # [B, N-1, D] - exclude last position
 
         # Adjust valid_lengths: we lose one position due to the shift
         # valid_lengths was (past_lens + 1), now we use (past_lens + 1 - 1) = past_lens
         # But we need to be careful: valid_lengths already accounts for aux token
         supervision_lengths = valid_lengths - 1  # [B,]
-        supervision_lengths = torch.clamp(
-            supervision_lengths, min=0
-        )  # ensure non-negative
+        supervision_lengths = torch.clamp(supervision_lengths, min=0)  # ensure non-negative
 
         # supervision_weights: mask out padding positions
         supervision_weights = (supervision_ids != 0).float()  # [B, N-1]
@@ -478,9 +425,7 @@ class RetreivalModel(BaseRecommender):
             lengths=supervision_lengths,
             output_embeddings=output_embeddings_for_loss,  # [B, N-1, D] -> [T, D]
             supervision_ids=supervision_ids,  # [B, N-1] -> [T,]
-            supervision_embeddings=self.preprocessor.get_embedding_by_id(
-                supervision_ids
-            ),  # [B, N-1, D] -> [T, D]
+            supervision_embeddings=self.preprocessor.get_embedding_by_id(supervision_ids),  # [B, N-1, D] -> [T, D]
             supervision_weights=supervision_weights,  # [B, N-1] -> [T,]
         )
 
@@ -490,9 +435,7 @@ class RetreivalModel(BaseRecommender):
             **jagged_features,
         )
 
-        self.log(
-            "train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True
-        )
+        self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def on_validation_epoch_start(self) -> None:
@@ -505,9 +448,7 @@ class RetreivalModel(BaseRecommender):
             batch, device=self.device, max_output_length=self.gr_output_length + 1
         )
 
-        top_k_ids, top_k_scores = self.retrieve(
-            seq_features=seq_features, k=self.k, filter_past_ids=True
-        )
+        top_k_ids, top_k_scores = self.retrieve(seq_features=seq_features, k=self.k, filter_past_ids=True)
 
         self.metrics.update(top_k_ids=top_k_ids, target_ids=target_ids)
 
@@ -555,9 +496,7 @@ class RetreivalModel(BaseRecommender):
         seq_feature, target_ids = get_sequential_features(
             batch, device=self.device, max_output_length=self.gr_output_length + 1
         )
-        top_k_ids, top_k_scores = self.retrieve(
-            seq_features=seq_feature, k=self.k, filter_past_ids=True
-        )
+        top_k_ids, top_k_scores = self.retrieve(seq_features=seq_feature, k=self.k, filter_past_ids=True)
         return {
             "top_k_ids": top_k_ids,
             "top_k_scores": top_k_scores,
@@ -568,15 +507,11 @@ class RetreivalModel(BaseRecommender):
         """Lightning calls this at the end of the predict epoch."""
         # Convert predictions from list of dicts to dict of lists
         # TODO: NOTE the python skills here
-        for i, predictions in enumerate(
-            self.trainer.predict_loop._predictions
-        ):  # NOTE: loop fo different dataloaders
+        for i, predictions in enumerate(self.trainer.predict_loop._predictions):  # NOTE: loop fo different dataloaders
             if predictions and isinstance(
                 predictions[0], dict
             ):  # NOTE: the predictions are List[Dict[str, Tensor]] of all batches
                 keys = predictions[0].keys()
-                converted_predictions = {
-                    key: sum((pred[key] for pred in predictions), []) for key in keys
-                }
+                converted_predictions = {key: sum((pred[key] for pred in predictions), []) for key in keys}
                 self.trainer.predict_loop._predictions[i] = converted_predictions  # type: ignore
                 # final results -> Dict[str, List[Tensor]], normally the final results after prediction

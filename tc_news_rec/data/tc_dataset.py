@@ -1,13 +1,14 @@
-import torch
-import pandas as pd
 import os
-from typing import Optional, List, Tuple, Dict, Any
-import lightning as L
-from omegaconf import DictConfig
-import hydra
+from typing import Any, Dict, List, Optional, Tuple
 
-from tc_news_rec.utils.logger import RankedLogger
+import hydra
+import lightning as L
+import pandas as pd
+import torch
+from omegaconf import DictConfig
+
 from tc_news_rec.data.preprocessor import DataProcessor
+from tc_news_rec.utils.logger import RankedLogger
 
 log = RankedLogger(__name__)
 
@@ -79,20 +80,16 @@ class TCDataset(torch.utils.data.Dataset):
                 # check the column exists and status, like type, max, min, etc.
                 column_exists = column in self.df.columns
                 if not column_exists:
-                    raise ValueError(
-                        f"Column {column} does not exist in the ratings file."
-                    )
+                    raise ValueError(f"Column {column} does not exist in the ratings file.")
                 column_type = self.df[column].dtype
                 max_value = self.df[column].max()
                 min_value = self.df[column].min()
-                columns_status.append(
-                    {
-                        "column": column,
-                        "type": column_type,
-                        "max": max_value,
-                        "min": min_value,
-                    }
-                )
+                columns_status.append({
+                    "column": column,
+                    "type": column_type,
+                    "max": max_value,
+                    "min": min_value,
+                })
             log.info(f"Additional columns status: {columns_status}")
 
     def __len__(self) -> int:
@@ -132,9 +129,7 @@ class TCDataset(torch.utils.data.Dataset):
 
         if self._sample_ratio < 1.0:
             raw_length = len(eval_as_list(data.sequence_item_ids, self._ignore_last_n))
-            sampling_kept_mask = (
-                torch.rand((raw_length,), dtype=torch.float32) < self._sample_ratio
-            ).tolist()
+            sampling_kept_mask = (torch.rand((raw_length,), dtype=torch.float32) < self._sample_ratio).tolist()
         else:
             sampling_kept_mask = None
 
@@ -197,9 +192,7 @@ class TCDataset(torch.utils.data.Dataset):
             == item_day_history_len
         ), "Sequence lengths are not equal!"  # NOTE: current is full interactive length
 
-        def truncate_or_pad(
-            y: List[int], target_len: int, chronological: bool = False
-        ) -> List[int]:
+        def truncate_or_pad(y: List[int], target_len: int, chronological: bool = False) -> List[int]:
             y_len = len(y)
             if y_len < target_len:
                 y = y + [0] * (target_len - y_len)
@@ -286,9 +279,7 @@ class TCDataset(torch.utils.data.Dataset):
             "region",
             "referrer_type",
         ]
-        user_feature_ids = {
-            feat: int(data[feat]) for feat in user_features if feat in data
-        }
+        user_feature_ids = {feat: int(data[feat]) for feat in user_features if feat in data}
 
         # Retrieve embeddings
         emb_dim = 250
@@ -303,42 +294,24 @@ class TCDataset(torch.utils.data.Dataset):
             else:
                 raise ValueError("Embedding data format not supported.")
 
-        historical_item_embeddings = torch.stack(
-            [get_embedding(i) for i in historical_item_ids]
-        )
+        historical_item_embeddings = torch.stack([get_embedding(i) for i in historical_item_ids])
         target_item_embedding = get_embedding(target_item_id)
 
         sample_dict = {
             "user_id": torch.tensor(user_id, dtype=torch.int64),
             "historical_item_ids": torch.tensor(historical_item_ids, dtype=torch.int64),
             "historical_item_embeddings": historical_item_embeddings,
-            "historical_item_click_times": torch.tensor(
-                historical_item_click_times, dtype=torch.int64
-            ),
-            "historical_item_category_ids": torch.tensor(
-                historical_item_category_ids, dtype=torch.int64
-            ),
-            "historical_item_created_ats": torch.tensor(
-                historical_item_created_ats, dtype=torch.int64
-            ),
-            "historical_item_words_counts": torch.tensor(
-                historical_item_words_counts, dtype=torch.int64
-            ),
-            "historical_item_ages": torch.tensor(
-                historical_item_ages, dtype=torch.int64
-            ),
-            "historical_item_hours": torch.tensor(
-                historical_item_hours, dtype=torch.int64
-            ),
-            "historical_item_days": torch.tensor(
-                historical_item_days, dtype=torch.int64
-            ),
+            "historical_item_click_times": torch.tensor(historical_item_click_times, dtype=torch.int64),
+            "historical_item_category_ids": torch.tensor(historical_item_category_ids, dtype=torch.int64),
+            "historical_item_created_ats": torch.tensor(historical_item_created_ats, dtype=torch.int64),
+            "historical_item_words_counts": torch.tensor(historical_item_words_counts, dtype=torch.int64),
+            "historical_item_ages": torch.tensor(historical_item_ages, dtype=torch.int64),
+            "historical_item_hours": torch.tensor(historical_item_hours, dtype=torch.int64),
+            "historical_item_days": torch.tensor(historical_item_days, dtype=torch.int64),
             **user_feature_ids,
             "target_item_id": torch.tensor(target_item_id, dtype=torch.int64),
             "target_item_embedding": target_item_embedding,
-            "target_item_click_time": torch.tensor(
-                target_item_click_time, dtype=torch.int64
-            ),
+            "target_item_click_time": torch.tensor(target_item_click_time, dtype=torch.int64),
             "history_len": torch.tensor(history_len, dtype=torch.int64),
         }
 
@@ -426,17 +399,13 @@ class TCDataModule(L.LightningDataModule):
             train_df = full_df.iloc[:train_len]
             val_df = full_df.iloc[train_len : train_len + val_len]
 
-            log.info(
-                f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}"
-            )
+            log.info(f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
 
             if stage == "fit" or stage is None:
                 self.train_dataset = self.instantiate_dataset(
                     file=train_df, embedding_data=embedding_data, ignore_last_n=0
                 )
-                self.val_dataset = self.instantiate_dataset(
-                    file=val_df, embedding_data=embedding_data, ignore_last_n=0
-                )
+                self.val_dataset = self.instantiate_dataset(file=val_df, embedding_data=embedding_data, ignore_last_n=0)
             if stage == "test" or stage is None:
                 self.test_dataset = self.instantiate_dataset(
                     file=test_df, embedding_data=embedding_data, ignore_last_n=0
@@ -446,9 +415,7 @@ class TCDataModule(L.LightningDataModule):
             # But for now, let's just use the same file for all if random_split is False (or raise error as per previous logic)
             # Or maybe the user intends to provide different files? But we only have one 'file' argument now.
             # Assuming random_split is the primary mode as requested.
-            raise NotImplementedError(
-                "Non-random split strategy is not implemented yet."
-            )
+            raise NotImplementedError("Non-random split strategy is not implemented yet.")
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(

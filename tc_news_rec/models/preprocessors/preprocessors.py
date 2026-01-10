@@ -1,13 +1,14 @@
 import abc
-import torch
 import math
-from typing import Dict, Tuple, List
-from omegaconf import DictConfig
-import hydra
+from typing import Dict, List, Tuple
 
-from tc_news_rec.utils.logger import RankedLogger
-from tc_news_rec.models.embeddings import EmbeddingModule, LocalEmbeddingModule
+import hydra
+import torch
+from omegaconf import DictConfig
+
+from tc_news_rec.models.embeddings import EmbeddingModule
 from tc_news_rec.models.utils.initialization import truncated_normal
+from tc_news_rec.utils.logger import RankedLogger
 
 log = RankedLogger(__name__)
 
@@ -26,9 +27,7 @@ def instantiate_embedding_module(
         )
         embedding_module = hydra.utils.instantiate(embedding_module)
     else:
-        log.warning(
-            "Using the provided EmbeddingModule instance directly without instantiation."
-        )
+        log.warning("Using the provided EmbeddingModule instance directly without instantiation.")
     assert isinstance(embedding_module, EmbeddingModule)
     return embedding_module
 
@@ -71,10 +70,8 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
         if isinstance(feature_counts, str):
             import json
 
-            assert feature_counts.endswith(
-                ".json"
-            ), "feature_counts file should be a json file"
-            with open(feature_counts, "r") as f:
+            assert feature_counts.endswith(".json"), "feature_counts file should be a json file"
+            with open(feature_counts) as f:
                 feature_counts = json.load(f)
 
         self._feature_counts = feature_counts
@@ -175,9 +172,7 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
             feature_id = past_payloads[feature]  # [B, N]
             if feature in self._embedding_module_dict:
                 feature_emb_module = self._embedding_module_dict[feature]
-                feature_embeddings = feature_emb_module.get_item_embeddings(
-                    feature_id
-                )  # type: ignore # [B, N, D]
+                feature_embeddings = feature_emb_module.get_item_embeddings(feature_id)  # type: ignore # [B, N, D]
                 seq_embeddings += feature_embeddings
             else:
                 raise ValueError(f"Embedding module for feature '{feature}' not found.")
@@ -185,18 +180,14 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
         seq_embeddings += self._content_emb_linear(content_embeddings)
 
         # Add aux embedding token at the first position
-        aux_embeddings = torch.zeros(
-            B, self._embedding_dim, device=seq_embeddings.device
-        )
+        aux_embeddings = torch.zeros(B, self._embedding_dim, device=seq_embeddings.device)
         for feature in self._aux_features:
             feature_id = past_payloads[feature]
             if feature_id.dim() == 2:
                 feature_id = feature_id[:, 0]  # [B,]
             if feature in self._embedding_module_dict:
                 feature_emb_module = self._embedding_module_dict[feature]
-                feature_embeddings = feature_emb_module.get_item_embeddings(
-                    feature_id
-                )  # type: ignore # [B, D]
+                feature_embeddings = feature_emb_module.get_item_embeddings(feature_id)  # type: ignore # [B, D]
                 aux_embeddings += feature_embeddings
             else:
                 raise ValueError(f"Embedding module for feature '{feature}' not found.")
@@ -209,9 +200,7 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
             ],
             dim=1,
         )  # [B, N + 1, D]
-        valid_mask = torch.cat(
-            [torch.ones(B, 1, 1, device=valid_mask.device), valid_mask], dim=1
-        )  # [B, N + 1, 1]
+        valid_mask = torch.cat([torch.ones(B, 1, 1, device=valid_mask.device), valid_mask], dim=1)  # [B, N + 1, 1]
 
         # Remove the last token
         seq_embeddings = seq_embeddings[:, :-1, :]  # [B, N, D]
@@ -226,18 +215,12 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
                 dtype=torch.long,
                 device=seq_embeddings.device,
             )
-        ).unsqueeze(
-            0
-        )  # [B, N, D]
+        ).unsqueeze(0)  # [B, N, D]
         seq_embeddings = self._dropout(seq_embeddings)
         seq_embeddings = seq_embeddings * valid_mask
 
         # set aux_mask (exclude the first token for attention)
-        aux_mask = torch.arange(N, device=past_lens.device).unsqueeze(0) < (
-            past_lens + 1
-        ).unsqueeze(
-            1
-        )  # [B, N]
+        aux_mask = torch.arange(N, device=past_lens.device).unsqueeze(0) < (past_lens + 1).unsqueeze(1)  # [B, N]
         # TODO: consider the aux_mask and the first aux token
         # aux_mask[:, 0] = False  # [B, N]
 

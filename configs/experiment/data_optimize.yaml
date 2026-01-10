@@ -5,7 +5,7 @@ defaults:
 # 1. Padding 策略
 # 原始 max_seq_length=50 对于均值 5.56 来说可能造成大量 mask 计算浪费
 # 但考虑到 max=241，还是保留一定的长度，或者稍微缩减以加速训练
-max_seq_length: 30 
+max_seq_length: 30
 
 # 2. Batch Size
 # 短序列意味着每个 sample 的计算量小，可以显著增大 Batch Size

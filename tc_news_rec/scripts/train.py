@@ -36,14 +36,10 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         L.seed_everything(cfg.seed, workers=True)
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule: L.LightningDataModule = hydra.utils.instantiate(
-        cfg.data, _recursive_=False
-    )
+    datamodule: L.LightningDataModule = hydra.utils.instantiate(cfg.data, _recursive_=False)
 
     log.info(f"Instantiating model <{cfg.model._target_}>")
-    model: L.LightningModule = hydra.utils.instantiate(
-        cfg.model, datamodule=datamodule, _recursive_=False
-    )
+    model: L.LightningModule = hydra.utils.instantiate(cfg.model, datamodule=datamodule, _recursive_=False)
 
     log.info("Instantiating callbacks...")
     callbacks: list[L.Callback] = instantiate_callbacks(cfg.get("callbacks"))
@@ -52,9 +48,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
-    trainer: L.Trainer = hydra.utils.instantiate(
-        cfg.trainer, callbacks=callbacks, logger=logger
-    )
+    trainer: L.Trainer = hydra.utils.instantiate(cfg.trainer, callbacks=callbacks, logger=logger)
 
     # Manually log the model summary to ensure it appears in the log file
     from lightning.pytorch.utilities.model_summary import ModelSummary
@@ -104,9 +98,7 @@ def main(cfg: DictConfig) -> Optional[float]:
         Optional[float]: optimized metric value
     """
     metric_dict, _ = train(cfg)
-    metric_value = get_metric_value(
-        metric_dict, metric_name=cfg.get("optimized_metric")
-    )
+    metric_value = get_metric_value(metric_dict, metric_name=cfg.get("optimized_metric"))
 
     return metric_value
 

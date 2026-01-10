@@ -1,10 +1,10 @@
-from typing import List, Tuple, Optional
+from typing import Optional, Tuple
+
+import hydra
 import torch
 from omegaconf import DictConfig
-import hydra
 
-from tc_news_rec.models.indexing.top_k import TopKModule, MIPSBruteTopK
-import tc_news_rec.models.utils.ops as ops
+from tc_news_rec.models.indexing.top_k import TopKModule
 
 
 class CandidateIndex(torch.nn.Module):
@@ -28,9 +28,7 @@ class CandidateIndex(torch.nn.Module):
         super().__init__()
         assert ids.dim() == 2 and ids.size(0) == 1, "ids should be of shape [1, X]"
         assert embeddings is None or (
-            embeddings.dim() == 3
-            and embeddings.size(0) == 1
-            and embeddings.size(1) == ids.size(1)
+            embeddings.dim() == 3 and embeddings.size(0) == 1 and embeddings.size(1) == ids.size(1)
         ), "embeddings should be of shape [1, X, D] if provided"
         self.register_buffer("_ids", torch.as_tensor(ids))  # [1, X]
         self._invalid_ids = invalid_ids
@@ -45,9 +43,7 @@ class CandidateIndex(torch.nn.Module):
         elif isinstance(top_k_module, TopKModule):
             self._top_k_module = top_k_module
         else:
-            raise ValueError(
-                f"top_k_module should be of type TopKModule or DictConfig, got {type(top_k_module)}"
-            )
+            raise ValueError(f"top_k_module should be of type TopKModule or DictConfig, got {type(top_k_module)}")
 
     def update_embeddings(self, embeddings: Optional[torch.Tensor]) -> None:
         if embeddings is not None:
@@ -113,9 +109,7 @@ class CandidateIndex(torch.nn.Module):
         # TODO: understand the vectorized invalid id removal and torch functions used
         if invalid_ids is not None:
             # Check for invalid ids: [B, K', N] -> [B, K']
-            is_invalid = (top_k_prime_ids.unsqueeze(2) == invalid_ids.unsqueeze(1)).any(
-                dim=2
-            )
+            is_invalid = (top_k_prime_ids.unsqueeze(2) == invalid_ids.unsqueeze(1)).any(dim=2)
 
             # Mask scores of invalid items with -inf
             masked_scores = top_k_prime_scores.clone()
