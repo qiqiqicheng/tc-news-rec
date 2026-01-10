@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - override /data: default
+
+# 1. Padding 策略
+# 原始 max_seq_length=50 对于均值 5.56 来说可能造成大量 mask 计算浪费
+# 但考虑到 max=241，还是保留一定的长度，或者稍微缩减以加速训练
+max_seq_length: 30 
+
+# 2. Batch Size
+# 短序列意味着每个 sample 的计算量小，可以显著增大 Batch Size
+# 大 Batch Size 对于对比学习/Negative Sampling 非常有利 (In-Batch negatives)
+batch_size: 128 # 原 32 -> 128
+
+# 3. 采样策略优化
+# 原来 split_ratios: [0.8, 0.1, 0.1] 没问题
+# 考虑到数据稀疏，可以尝试不进行下采样 (sample_ratio=1.0)
+sampling_ratio: 1.0
+
+# 4. 数据预处理参数 (这些参数是在 preprocessor.py 中硬编码或读取的，这里可能无法直接通过 hydra 覆盖逻辑)
+# 建议后续在 preprocessor 代码中加入 filter_min_len=3 的逻辑

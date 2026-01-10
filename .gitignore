@@ -9,6 +9,9 @@ user_data/
 # logs
 logs/
 
+# ckpt
+checkpoints/
+
 # personal record
 record.md
 

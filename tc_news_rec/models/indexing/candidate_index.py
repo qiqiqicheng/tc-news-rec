@@ -112,29 +112,23 @@ class CandidateIndex(torch.nn.Module):
 
         # TODO: understand the vectorized invalid id removal and torch functions used
         if invalid_ids is not None:
-            id_is_valid = ~(
-                (
-                    top_k_prime_ids.unsqueeze(2)
-                    == invalid_ids.unsqueeze(1)  # [B, K, 1], [B, 1, N] -> [B, K, N]
-                ).max(2)[
-                    0
-                ]  # [B, K]
-            )
-            id_is_valid = torch.logical_and(
-                id_is_valid,  # [B, K]
-                torch.cumsum(id_is_valid.int(), dim=1) <= k,  # [B, K]
+            # Check for invalid ids: [B, K', N] -> [B, K']
+            is_invalid = (top_k_prime_ids.unsqueeze(2) == invalid_ids.unsqueeze(1)).any(
+                dim=2
             )
 
-            top_k_rowwise_offsets = torch.nonzero(id_is_valid, as_tuple=True)[1].view(
-                -1, k
-            )  # [B, k]
+            # Mask scores of invalid items with -inf
+            masked_scores = top_k_prime_scores.clone()
+            masked_scores[is_invalid] = float("-inf")
 
-            top_k_scores = torch.gather(
-                top_k_prime_scores, dim=1, index=top_k_rowwise_offsets
-            )
-            top_k_ids = torch.gather(
-                top_k_prime_ids, dim=1, index=top_k_rowwise_offsets
-            )
+            # Re-select top-k from the masked prime list
+            # If valid items < k, we will select items with -inf score (which are technically invalid)
+            # This maintains the shape [B, k] without crashing
+            top_k_scores, indices = torch.topk(masked_scores, k=k, dim=1)
+
+            # Gather corresponding IDs
+            top_k_ids = torch.gather(top_k_prime_ids, dim=1, index=indices)
+
         else:
             top_k_ids = top_k_prime_ids[:, :k]  # [B, k]
             top_k_scores = top_k_prime_scores[:, :k]  # [B, k]

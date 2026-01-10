@@ -5,7 +5,6 @@ from typing import Optional, List, Tuple, Dict, Any
 import lightning as L
 from omegaconf import DictConfig
 import hydra
-from pprint import pformat
 
 from tc_news_rec.utils.logger import RankedLogger
 from tc_news_rec.data.preprocessor import DataProcessor
@@ -169,7 +168,6 @@ class TCDataset(torch.utils.data.Dataset):
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
-        # print(data.keys())
         item_age_history, item_age_history_len = prepare_sequence_ids(
             data["age_bucket"],
             ignore_last_n=self._ignore_last_n,
@@ -410,12 +408,10 @@ class TCDataModule(L.LightningDataModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         # Load data once
-        print(f"Loading data from {self.train_file} and {self.test_file}")
         log.info(f"Loading data from {self.train_file} and {self.test_file}")
         train_df = load_data(self.train_file)
         test_df = load_data(self.test_file)
 
-        print(f"Loading embeddings from {self.embedding_file}")
         log.info(f"Loading embeddings from {self.embedding_file}")
         embedding_data = load_data(self.embedding_file)
 

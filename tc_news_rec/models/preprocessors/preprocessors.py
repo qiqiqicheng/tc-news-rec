@@ -16,6 +16,7 @@ def instantiate_embedding_module(
     embedding_module: EmbeddingModule | DictConfig, num_items: int, emb_dim: int
 ) -> EmbeddingModule:
     if isinstance(embedding_module, DictConfig):
+        embedding_module = embedding_module.copy()
         if "num_items" not in embedding_module:
             embedding_module.num_items = num_items
         if "emb_dim" not in embedding_module:
@@ -44,7 +45,7 @@ class InputPreprocessor(torch.nn.Module, abc.ABC):
     @abc.abstractmethod
     def get_embedding_by_id(self, item_ids: torch.Tensor) -> torch.Tensor:
         pass
-    
+
     @abc.abstractmethod
     def get_all_item_ids(self) -> List[int]:
         pass
@@ -69,12 +70,14 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
 
         if isinstance(feature_counts, str):
             import json
-            assert feature_counts.endswith(".json"), "feature_counts file should be a json file"
+
+            assert feature_counts.endswith(
+                ".json"
+            ), "feature_counts file should be a json file"
             with open(feature_counts, "r") as f:
                 feature_counts = json.load(f)
 
         self._feature_counts = feature_counts
-        # print(f"Feature counts loaded: {self._feature_counts}")
         self._dropout = torch.nn.Dropout(dropout_rate)
         self._position_embeddings = torch.nn.Embedding(max_seq_len, emb_dim)
 
@@ -138,7 +141,7 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
 
     def get_embedding_by_id(self, item_ids: torch.Tensor) -> torch.Tensor:
         return self._item_id_embedding.get_item_embeddings(item_ids)
-    
+
     def get_all_item_ids(self) -> List[int]:
         return list(range(1, self._feature_counts["item_id"] + 1))
 

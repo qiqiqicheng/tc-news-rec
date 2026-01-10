@@ -184,7 +184,19 @@ class BaseRecommender(L.LightningModule):
         """
         optimizer = self.optimizer(params=self.parameters())  # type: ignore
         if self.scheduler is not None:
-            scheduler = self.scheduler(optimizer=optimizer)  # type: ignore
+            scheduler_kwargs = {}
+            # If the scheduler is OneCycleLR, we need to pass total_steps
+            if (
+                hasattr(self.scheduler, "func")
+                and self.scheduler.func == torch.optim.lr_scheduler.OneCycleLR
+            ):
+                scheduler_kwargs["total_steps"] = (
+                    self.trainer.estimated_stepping_batches
+                )
+
+            scheduler = self.scheduler(
+                optimizer=optimizer, **scheduler_kwargs
+            )  # type: ignore
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": {

@@ -26,7 +26,7 @@ scheduler:
 
 configure_optimizer_params:
   monitor: val/hr@5
-  interval: epoch
+  interval: step
   frequency: 1
 
 gr_output_length: 1
@@ -101,4 +101,4 @@ metrics:
   at_k_list: [ 1, 5 ]
 
 # compile model for faster training with pytorch 2.0
-compile_model: true
+compile_model: false
