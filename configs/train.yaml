@@ -5,7 +5,7 @@ defaults:
   - data: default
   - model: hstu
   - callbacks: default
-  - logger: csv
+  - logger: wandb_csv
   - trainer: gpu
   - paths: default
   - hydra: default
@@ -44,3 +44,6 @@ ckpt_path: null
 
 # seed for random number generators in pytorch, numpy and python.random
 seed: 4221
+
+# optimized metric for hyperparameter optimization
+optimized_metric: "val/ndcg@5"

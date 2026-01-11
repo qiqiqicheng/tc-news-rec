@@ -5,5 +5,7 @@ defaults:
 accelerator: gpu
 devices: [6]
 
-val_check_interval: 500
-check_val_every_n_epoch: null
+gradient_clip_val: 1.0
+accumulate_grad_batches: 2
+val_check_interval: 2000
+log_every_n_steps: 50

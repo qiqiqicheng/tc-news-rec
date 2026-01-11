@@ -14,15 +14,22 @@ optimizer:
   eps: 1e-8
   weight_decay: 0.01
 
+# scheduler:
+#   _target_: torch.optim.lr_scheduler.OneCycleLR
+#   _partial_: true
+#   max_lr: 0.0005
+#   pct_start: 0.05
+#   div_factor: 25.0
+#   final_div_factor: 1000.0
+#   anneal_strategy: 'cos'
+#   total_steps: ???
+
 scheduler:
-  _target_: torch.optim.lr_scheduler.OneCycleLR
+  _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
   _partial_: true
-  max_lr: 0.0005
-  pct_start: 0.05
-  div_factor: 25.0
-  final_div_factor: 1000.0
-  anneal_strategy: 'cos'
-  total_steps: ???
+  T_0: 2000
+  T_mult: 2
+  eta_min: 1e-6
 
 configure_optimizer_params:
   monitor: val/hr@5

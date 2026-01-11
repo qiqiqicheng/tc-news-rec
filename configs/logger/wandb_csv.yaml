@@ -1,0 +1,17 @@
+# wnb + csv
+csv:
+  _target_: lightning.pytorch.loggers.csv_logs.CSVLogger
+  save_dir: "${paths.output_dir}"
+  name: "csv/"
+  prefix: ""
+
+wandb:
+  _target_: lightning.pytorch.loggers.wandb.WandbLogger
+  save_dir: "${paths.output_dir}"
+  project: "tc-news-rec"
+  # name: "${task_name}" # Optional: customize run name
+  log_model: False # Set to True to log checkpoints to wandb
+  offline: False # Set to True if no internet connection
+  # id: null # Pass run ID to resume
+  # anonymous: null
+  # api_key: null # typically set via environment variable or wandb login

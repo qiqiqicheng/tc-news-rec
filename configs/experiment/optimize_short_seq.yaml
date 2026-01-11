@@ -33,7 +33,6 @@ model:
   #   anneal_strategy: null
   #   total_steps: null
 
-  # 可以在这里显式指定 configure_optimizers 的行为
   configure_optimizer_params:
     monitor: val/ndcg@5
     mode: max
