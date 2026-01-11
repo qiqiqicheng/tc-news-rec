@@ -1,10 +1,11 @@
-import torch
-import torch.nn.functional as F
 import abc
 
-from tc_news_rec.utils.logger import RankedLogger
-from tc_news_rec.models.similarity.similarity import NDPModule
+import torch
+import torch.nn.functional as F
+
 from tc_news_rec.models.negative_samplers.negative_samplers import NegativeSampler
+from tc_news_rec.models.similarity.similarity import NDPModule
+from tc_news_rec.utils.logger import RankedLogger
 
 log = RankedLogger(__name__)
 
@@ -72,17 +73,13 @@ class BCELoss(AutoregressiveLoss):
             / self._temperature
         )  # [B,]
 
-        sampled_negative_valid_mask = (
-            supervision_ids != negative_ids.squeeze(1)
-        ).float()  # [B,]
+        sampled_negative_valid_mask = (supervision_ids != negative_ids.squeeze(1)).float()  # [B,]
 
         loss_weights = supervision_weights * sampled_negative_valid_mask  # [B,]
 
         weighted_losses = (
             (
-                F.binary_cross_entropy_with_logits(
-                    postive_logits, torch.ones_like(postive_logits), reduction="none"
-                )
+                F.binary_cross_entropy_with_logits(postive_logits, torch.ones_like(postive_logits), reduction="none")
                 + F.binary_cross_entropy_with_logits(
                     negative_logits, torch.zeros_like(negative_logits), reduction="none"
                 )
@@ -95,10 +92,22 @@ class BCELoss(AutoregressiveLoss):
 
 
 class SampledSoftmaxLoss(AutoregressiveLoss):
-    def __init__(self, num_to_sample: int, softmax_temperature: float):
+    def __init__(
+        self,
+        num_to_sample: int,
+        softmax_temperature: float,
+        use_hard_negatives: bool = True,
+    ):
+        """
+        Args:
+            num_to_sample: Number of negative samples per positive
+            softmax_temperature: Temperature for softmax scaling
+            use_hard_negatives: Whether to use hard negative mining when available
+        """
         super().__init__()
         self._num_to_sample = num_to_sample
         self._softmax_temperature = softmax_temperature
+        self._use_hard_negatives = use_hard_negatives
 
     def jagged_forward(
         self,
@@ -111,20 +120,32 @@ class SampledSoftmaxLoss(AutoregressiveLoss):
         **kwargs,
     ) -> torch.Tensor:
         """
+        Sampled softmax loss with optional hard negative mining.
+
         Args:
-            output_embeddings (torch.Tensor): [T, D]
-            supervision_ids (torch.Tensor): [T]
-            supervision_embeddings (torch.Tensor): target id, [T, D]
-            supervision_weights (torch.Tensor): reweighting or masking tensor, [T,]
-            negative_sampler (NegativeSampler): _description_
-            similarity_module (NDPModule): _description_
+            output_embeddings (torch.Tensor): [T, D] query embeddings from encoder
+            supervision_ids (torch.Tensor): [T] positive item ids
+            supervision_embeddings (torch.Tensor): [T, D] positive item embeddings (L2 normalized)
+            supervision_weights (torch.Tensor): [T,] weights for loss masking
+            negative_sampler (NegativeSampler): sampler to draw negative samples
+            similarity_module (NDPModule): similarity computation module
 
         Returns:
-            torch.Tensor: _loss value
+            torch.Tensor: scalar loss value
         """
-        negative_ids, negative_embeddings = negative_sampler(
-            positive_item_ids=supervision_ids, num_to_sample=self._num_to_sample
-        )  # [T, num_to_sample], [T, num_to_sample, D]
+        # Use hard negative mining if enabled and sampler supports it
+        if self._use_hard_negatives:
+            negative_ids, negative_embeddings = negative_sampler.forward_with_query(
+                positive_item_ids=supervision_ids,
+                query_embeddings=output_embeddings,  # Pass query for hard negative mining
+                num_to_sample=self._num_to_sample,
+            )
+        else:
+            negative_ids, negative_embeddings = negative_sampler(
+                positive_item_ids=supervision_ids,
+                num_to_sample=self._num_to_sample,
+            )
+        # negative_ids: [T, num_to_sample], negative_embeddings: [T, num_to_sample, D]
 
         positive_logits = (
             similarity_module(
@@ -140,26 +161,19 @@ class SampledSoftmaxLoss(AutoregressiveLoss):
             input_embeddings=output_embeddings,  # [T, D]
             item_embeddings=negative_embeddings,  # [T, num_to_sample, D]
         )  # [T, num_to_sample]
+
+        # Mask out false negatives (when sampled negative == positive)
         negative_logits = torch.where(
             supervision_ids.unsqueeze(1) == negative_ids,
-            torch.tensor(
-                -5e4, device=negative_logits.device, dtype=negative_logits.dtype
-            ),
+            torch.tensor(-5e4, device=negative_logits.device, dtype=negative_logits.dtype),
             negative_logits / self._softmax_temperature,
         )  # [T, num_to_sample]
 
-        logits = torch.cat(
-            [positive_logits.unsqueeze(1), negative_logits], dim=1
-        )  # [T, 1 + num_to_sample]
-
-        # labels = torch.zeros(
-        #     logits.size(0),
-        #     dtype=torch.long,
-        #     device=logits.device
-        # )  # [B,], all zeros since positive is the first class
+        logits = torch.cat([positive_logits.unsqueeze(1), negative_logits], dim=1)  # [T, 1 + num_to_sample]
 
         loss_weights = supervision_weights  # [T,]
 
+        # Cross entropy loss: -log(softmax(logits)[0]) where index 0 is positive
         weighted_losses = -F.log_softmax(logits, dim=1)[:, 0] * loss_weights  # [T,]
 
         loss = weighted_losses.sum() / (loss_weights.sum() + 1e-8)

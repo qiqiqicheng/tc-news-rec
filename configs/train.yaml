@@ -3,7 +3,7 @@
 defaults:
   - _self_
   - data: large
-  - model: hstu
+  - model: light_hstu
   - callbacks: default
   - logger: wandb_csv
   - trainer: gpu
@@ -46,4 +46,4 @@ ckpt_path: null
 seed: 4221
 
 # optimized metric for hyperparameter optimization
-optimized_metric: "val/ndcg@5"
+optimized_metric: "val/mrr"

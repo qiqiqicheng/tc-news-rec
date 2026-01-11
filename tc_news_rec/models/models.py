@@ -13,6 +13,7 @@ from tc_news_rec.models.indexing.candidate_index import CandidateIndex
 from tc_news_rec.models.losses.losses import AutoregressiveLoss
 from tc_news_rec.models.negative_samplers.negative_samplers import (
     GlobalNegativeSampler,
+    HardNegativeSampler,
     InBatchNegativesSampler,
     NegativeSampler,
 )
@@ -393,7 +394,7 @@ class RetreivalModel(BaseRecommender):
                 valid_mask=(in_batch_ids != 0).unsqueeze(-1).float(),
                 embeddings=self.preprocessor.get_embedding_by_id(in_batch_ids),
             )
-        elif isinstance(self.negative_sampler, GlobalNegativeSampler):
+        elif isinstance(self.negative_sampler, (GlobalNegativeSampler, HardNegativeSampler)):
             self.negative_sampler.set_item_embedding(self.preprocessor.get_item_id_embedding_module())
             self.negative_sampler.set_all_item_ids(
                 self.preprocessor.get_all_item_ids(), device=encoded_embeddings.device

@@ -60,6 +60,9 @@ preprocessor:
   feature_counts: ${hydra:runtime.cwd}/user_data/processed/feature_counts.json
   max_seq_len: ${eval:${data.max_seq_length} + ${model.gr_output_length} + 1}
   dropout_rate: 0.2
+  # Content embedding MLP to project 250-dim content embedding to item_embedding_dim
+  content_emb_mlp: true
+  content_emb_hidden_dim: 512
 
 sequence_encoder:
   _target_: tc_news_rec.models.sequential_encoders.hstu.HSTU
@@ -76,7 +79,7 @@ sequence_encoder:
   normalization: rel_bias
   linear_config: uvqk
   linear_activation: silu
-  concat_ua: false
+  concat_ua: true  # Enable concat mode [u, a, u*a] for better expressiveness
   enable_relative_attention_bias: true
 
 postprocessor:
@@ -88,8 +91,10 @@ similarity:
   _target_: tc_news_rec.models.similarity.similarity.DotProductSimilarity
 
 negative_sampler:
-  _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
+  _target_: tc_news_rec.models.negative_samplers.negative_samplers.HardNegativeSampler
   l2_normalize: true
+  hard_negative_ratio: 0.5  # 50% hard negatives, 50% random for diversity
+  candidate_pool_size: 4096  # Pool size for hard negative mining
 
 candidate_index:
   _target_: tc_news_rec.models.indexing.candidate_index.CandidateIndex
@@ -101,6 +106,7 @@ loss:
   _target_: tc_news_rec.models.losses.losses.SampledSoftmaxLoss
   num_to_sample: 1024
   softmax_temperature: 0.1
+  use_hard_negatives: true  # Enable hard negative mining
 
 metrics:
   _target_: tc_news_rec.models.metrics.retrieval_metrics.RetrievalMetrics

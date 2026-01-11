@@ -58,6 +58,8 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
         max_seq_len: int,
         dropout_rate: float = 0.1,
         payload_selection: List[str] | None = None,
+        content_emb_mlp: bool = False,
+        content_emb_hidden_dim: int = 512,
     ) -> None:
         super().__init__()
         if isinstance(embedding_module, DictConfig):
@@ -78,7 +80,18 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
         self._dropout = torch.nn.Dropout(dropout_rate)
         self._position_embeddings = torch.nn.Embedding(max_seq_len, emb_dim)
 
-        self._content_emb_linear = torch.nn.Linear(250, emb_dim)
+        # Content embedding projection: Linear or MLP
+        if content_emb_mlp:
+            self._content_emb_linear = torch.nn.Sequential(
+                torch.nn.Linear(250, content_emb_hidden_dim),
+                torch.nn.LayerNorm(content_emb_hidden_dim),
+                torch.nn.GELU(),
+                torch.nn.Dropout(dropout_rate),
+                torch.nn.Linear(content_emb_hidden_dim, emb_dim),
+            )
+            log.info(f"Using MLP for content embedding: 250 -> {content_emb_hidden_dim} -> {emb_dim}")
+        else:
+            self._content_emb_linear = torch.nn.Linear(250, emb_dim)
 
         self._item_id_embedding = instantiate_embedding_module(
             embedding_module=embedding_module,

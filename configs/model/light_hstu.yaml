@@ -1,0 +1,8 @@
+defaults:
+  - hstu
+  - _self_
+
+item_embedding_dim: 128
+
+sequence_encoder:
+  num_blocks: 4

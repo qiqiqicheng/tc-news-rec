@@ -7,7 +7,7 @@ max_seq_length: 50
 # 2. Batch Size
 # 短序列意味着每个 sample 的计算量小，可以显著增大 Batch Size
 # 大 Batch Size 对于对比学习/Negative Sampling 非常有利 (In-Batch negatives)
-batch_size: 128 # 原 32 -> 128
+batch_size: 256
 
 # 3. 采样策略优化
 # 原来 split_ratios: [0.8, 0.1, 0.1] 没问题

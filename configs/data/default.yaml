@@ -6,6 +6,11 @@ sampling_ratio: 1.0
 random_split: true
 split_ratios: [ 0.8, 0.1, 0.1 ]
 
+# Sliding window augmentation for long sequences
+sliding_window_augment: true
+sliding_window_step: 1
+sliding_window_min_len: 3
+
 data_preprocessor:
   _target_: tc_news_rec.data.preprocessor.DataProcessor
   data_dir: ${hydra:runtime.cwd}/tcdata

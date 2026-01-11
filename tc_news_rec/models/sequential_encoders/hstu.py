@@ -89,9 +89,7 @@ class RelativeBucketedTimeAndPositionBasedBias(RelativeAttentionBiasModule):
             torch.empty(2 * max_seq_len - 1).normal_(mean=0, std=0.02),
         )
         self._num_buckets: int = num_buckets
-        self._bucketization_fn: Callable[[torch.Tensor], torch.Tensor] = (
-            bucketization_fn
-        )
+        self._bucketization_fn: Callable[[torch.Tensor], torch.Tensor] = bucketization_fn
 
     def forward(
         self,
@@ -104,27 +102,31 @@ class RelativeBucketedTimeAndPositionBasedBias(RelativeAttentionBiasModule):
             (B, N, N).
         """
         B = all_timestamps.size(0)
-        N = self._max_seq_len
-        t = F.pad(self._pos_w[: 2 * N - 1], [0, N]).repeat(N)
-        t = t[..., :-N].reshape(1, N, 3 * N - 2)
-        r = (2 * N - 1) // 2
+        N = all_timestamps.size(1)  # Use actual input dimension instead of fixed max_seq_len
+
+        # Positional bias: use min(N, max_seq_len) to handle variable lengths
+        pos_N = min(N, self._max_seq_len)
+        t = F.pad(self._pos_w[: 2 * pos_N - 1], [0, pos_N]).repeat(pos_N)
+        t = t[..., :-pos_N].reshape(1, pos_N, 3 * pos_N - 2)
+        r = (2 * pos_N - 1) // 2
+        rel_pos_bias = t[:, :, r:-r]  # [1, pos_N, pos_N]
+
+        # If N > pos_N, we need to pad rel_pos_bias to match N
+        if pos_N < N:
+            # Pad positional bias to full size N
+            rel_pos_bias_full = torch.zeros(1, N, N, device=rel_pos_bias.device, dtype=rel_pos_bias.dtype)
+            rel_pos_bias_full[:, :pos_N, :pos_N] = rel_pos_bias
+            rel_pos_bias = rel_pos_bias_full
 
         # [B, N + 1] to simplify tensor manipulations.
-        ext_timestamps = torch.cat(
-            [all_timestamps, all_timestamps[:, N - 1 : N]], dim=1
-        )
+        ext_timestamps = torch.cat([all_timestamps, all_timestamps[:, N - 1 : N]], dim=1)
         # causal masking. Otherwise [:, :-1] - [:, 1:] works
         bucketed_timestamps = torch.clamp(
-            self._bucketization_fn(
-                ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)
-            ),
+            self._bucketization_fn(ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)),
             min=0,
             max=self._num_buckets,
         ).detach()
-        rel_pos_bias = t[:, :, r:-r]
-        rel_ts_bias = torch.index_select(
-            self._ts_w, dim=0, index=bucketed_timestamps.view(-1)
-        ).view(B, N, N)
+        rel_ts_bias = torch.index_select(self._ts_w, dim=0, index=bucketed_timestamps.view(-1)).view(B, N, N)
         return rel_pos_bias + rel_ts_bias
 
 
@@ -145,6 +147,8 @@ def _hstu_attention_maybe_from_cache(
     all_timestamps: Optional[torch.Tensor],
     invalid_attn_mask: torch.Tensor,
     rel_attn_bias: RelativeAttentionBiasModule,
+    attn_dropout_ratio: float = 0.0,
+    training: bool = False,
 ):
     B: int = x_offsets.size(0) - 1
     n: int = invalid_attn_mask.size(-1)
@@ -176,12 +180,8 @@ def _hstu_attention_maybe_from_cache(
             .view(B, n, -1)
         )
     else:
-        padded_q = ops.jagged_to_padded_dense(
-            values=q, offsets=x_offsets, max_lengths=n, padding_value=0.0
-        )
-        padded_k = ops.jagged_to_padded_dense(
-            values=k, offsets=x_offsets, max_lengths=n, padding_value=0.0
-        )
+        padded_q = ops.jagged_to_padded_dense(values=q, offsets=x_offsets, max_lengths=n, padding_value=0.0)
+        padded_k = ops.jagged_to_padded_dense(values=k, offsets=x_offsets, max_lengths=n, padding_value=0.0)
 
     # TODO: understand esinsum, num_heads and why using F.silu instand of F.softmax
     qk_attn = torch.einsum(
@@ -193,13 +193,13 @@ def _hstu_attention_maybe_from_cache(
         qk_attn = qk_attn + rel_attn_bias(all_timestamps).unsqueeze(1)
     qk_attn = F.silu(qk_attn) / n
     qk_attn = qk_attn * invalid_attn_mask.unsqueeze(0).unsqueeze(0).to(qk_attn.device)
+    # Apply attention dropout
+    qk_attn = F.dropout(qk_attn, p=attn_dropout_ratio, training=training)
     attn_output = ops.dense_to_jagged(
         torch.einsum(
             "bhnm,bmhd->bnhd",
             qk_attn,
-            ops.jagged_to_padded_dense(v, x_offsets, n).reshape(
-                B, n, num_heads, linear_dim
-            ),
+            ops.jagged_to_padded_dense(v, x_offsets, n).reshape(B, n, num_heads, linear_dim),
         ).reshape(B, n, num_heads * linear_dim),
         x_offsets,
     )
@@ -230,21 +230,16 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         self._dropout_ratio: float = dropout_ratio
         self._attn_dropout_ratio: float = attn_dropout_ratio
         self._num_heads: int = num_heads
-        self._rel_attn_bias: Optional[RelativeAttentionBiasModule] = (
-            relative_attention_bias_module
-        )
+        self._rel_attn_bias: Optional[RelativeAttentionBiasModule] = relative_attention_bias_module
         self._normalization: str = normalization
         self._linear_config: str = linear_config
         # understand the dimension setting, especially for num_heads
         if self._linear_config == "uvqk":
             self._uvqk = torch.nn.Parameter(
-                torch.empty(
-                    (
-                        embedding_dim,
-                        linear_hidden_dim * 2 * num_heads
-                        + attention_dim * num_heads * 2,
-                    )
-                ).normal_(mean=0, std=0.02),
+                torch.empty((
+                    embedding_dim,
+                    linear_hidden_dim * 2 * num_heads + attention_dim * num_heads * 2,
+                )).normal_(mean=0, std=0.02),
             )
         else:
             raise ValueError(f"Unknown linear_config {self._linear_config}")
@@ -262,9 +257,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         return F.layer_norm(x, normalized_shape=[self._embedding_dim], eps=self._eps)
 
     def _norm_attn_output(self, x: torch.Tensor) -> torch.Tensor:
-        return F.layer_norm(
-            x, normalized_shape=[self._linear_dim * self._num_heads], eps=self._eps
-        )
+        return F.layer_norm(x, normalized_shape=[self._linear_dim * self._num_heads], eps=self._eps)
 
     def forward(
         self,
@@ -276,7 +269,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         cache: Optional[HSTUCacheState] = None,
         return_cache_states: bool = False,
     ) -> torch.Tensor:
-        """
+        r"""
         Args:
             x: (\sum_i N_i, D) x float.
             x_offsets: (B + 1) x int32.
@@ -310,9 +303,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
             elif self._linear_activation == "none":
                 batched_mm_output = batched_mm_output
             else:
-                raise ValueError(
-                    f"Unknown self._linear_activation {self._linear_activation}"
-                )
+                raise ValueError(f"Unknown self._linear_activation {self._linear_activation}")
             u, v, q, k = torch.split(
                 batched_mm_output,
                 [
@@ -345,6 +336,8 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
                 all_timestamps=all_timestamps,
                 invalid_attn_mask=invalid_attn_mask,
                 rel_attn_bias=self._rel_attn_bias,
+                attn_dropout_ratio=self._attn_dropout_ratio,
+                training=self.training,
             )
         elif self._normalization == "softmax_rel_bias":
             if delta_x_offsets is not None:
@@ -376,18 +369,16 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
                     .view(B, n, -1)
                 )
             else:
-                padded_q = ops.jagged_to_padded_dense(
-                    values=q, offsets=x_offsets, max_lengths=n, padding_value=0.0
-                )
-                padded_k = ops.jagged_to_padded_dense(
-                    values=k, offsets=x_offsets, max_lengths=n, padding_value=0.0
-                )
+                padded_q = ops.jagged_to_padded_dense(values=q, offsets=x_offsets, max_lengths=n, padding_value=0.0)
+                padded_k = ops.jagged_to_padded_dense(values=k, offsets=x_offsets, max_lengths=n, padding_value=0.0)
 
             qk_attn = torch.einsum("bnd,bmd->bnm", padded_q, padded_k)
             if self._rel_attn_bias is not None:
                 qk_attn = qk_attn + self._rel_attn_bias(all_timestamps)
             qk_attn = F.softmax(qk_attn / math.sqrt(self._attention_dim), dim=-1)
             qk_attn = qk_attn * invalid_attn_mask
+            # Apply attention dropout
+            qk_attn = F.dropout(qk_attn, p=self._attn_dropout_ratio, training=self.training)
             attn_output = ops.dense_to_jagged(
                 torch.bmm(
                     qk_attn,
@@ -398,11 +389,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         else:
             raise ValueError(f"Unknown normalization method {self._normalization}")
 
-        attn_output = (
-            attn_output
-            if delta_x_offsets is None
-            else attn_output[delta_x_offsets[0], :]
-        )
+        attn_output = attn_output if delta_x_offsets is None else attn_output[delta_x_offsets[0], :]
         if self._concat_ua:
             a = self._norm_attn_output(attn_output)
             o_input = torch.cat([u, a, u * a], dim=-1)
@@ -421,9 +408,7 @@ class SequentialTransductionUnitJagged(torch.nn.Module):
         )
 
         if delta_x_offsets is not None:
-            new_outputs = cached_outputs.index_copy_(
-                dim=0, index=delta_x_offsets[0], source=new_outputs
-            )
+            new_outputs = cached_outputs.index_copy_(dim=0, index=delta_x_offsets[0], source=new_outputs)
 
         # TODO: understand why we need this restriction
         if return_cache_states and delta_x_offsets is None:
@@ -440,9 +425,7 @@ class HSTUJagged(torch.nn.Module):
     ) -> None:
         super().__init__()
 
-        self._attention_layers: torch.nn.ModuleList = torch.nn.ModuleList(
-            modules=modules
-        )
+        self._attention_layers: torch.nn.ModuleList = torch.nn.ModuleList(modules=modules)
         self._autocast_dtype: torch.dtype = autocast_dtype
 
     def jagged_forward(
@@ -455,7 +438,7 @@ class HSTUJagged(torch.nn.Module):
         cache: Optional[List[HSTUCacheState]] = None,
         return_cache_states: bool = False,
     ) -> Tuple[torch.Tensor, List[HSTUCacheState]]:
-        """
+        r"""
         Args:
             x: (\sum_i N_i, D) x float
             x_offsets: (B + 1) x int32
@@ -582,12 +565,9 @@ class HSTU(torch.nn.Module):
                     # TODO: change to lambda x.
                     relative_attention_bias_module=(
                         RelativeBucketedTimeAndPositionBasedBias(
-                            max_seq_len=max_sequence_len
-                            + max_output_len,  # accounts for next item.
+                            max_seq_len=max_sequence_len + max_output_len,  # accounts for next item.
                             num_buckets=128,
-                            bucketization_fn=lambda x: (
-                                torch.log(torch.abs(x).clamp(min=1)) / 0.301
-                            ).long(),
+                            bucketization_fn=lambda x: (torch.log(torch.abs(x).clamp(min=1)) / 0.301).long(),
                         )
                         if enable_relative_attention_bias
                         else None
@@ -623,9 +603,7 @@ class HSTU(torch.nn.Module):
                 continue
             try:
                 torch.nn.init.xavier_normal_(params.data)
-                log.info(
-                    f"Initialize {name} as xavier normal: {params.data.size()} params"
-                )
+                log.info(f"Initialize {name} as xavier normal: {params.data.size()} params")
             except Exception:
                 log.info(f"Failed to initialize {name}: {params.data.size()} params")
 
@@ -665,15 +643,30 @@ class HSTU(torch.nn.Module):
             encoded_embeddings of [B, N, D].
         """
         float_dtype = user_embeddings.dtype
+        # Get timestamps for relative time-based attention bias
+        all_timestamps = past_payloads[TIMESTAMPS_KEY] if TIMESTAMPS_KEY in past_payloads else None
+
+        # Ensure all_timestamps matches _attn_mask dimension
+        attn_mask_size = self._attn_mask.size(0)  # max_sequence_len + max_output_len
+        if all_timestamps is not None:
+            B, ts_len = all_timestamps.size()
+            if ts_len < attn_mask_size:
+                # Pad timestamps to match attn_mask size
+                padding = torch.zeros(
+                    B,
+                    attn_mask_size - ts_len,
+                    dtype=all_timestamps.dtype,
+                    device=all_timestamps.device,
+                )
+                all_timestamps = torch.cat([all_timestamps, padding], dim=1)
+            elif ts_len > attn_mask_size:
+                # Truncate timestamps (shouldn't happen normally)
+                all_timestamps = all_timestamps[:, :attn_mask_size]
+
         user_embeddings, cached_states = self._hstu(
             x=user_embeddings,
             x_offsets=ops.asynchronous_complete_cumsum(past_lengths),
-            # all_timestamps=(
-            #     past_payloads[TIMESTAMPS_KEY]
-            #     if TIMESTAMPS_KEY in past_payloads
-            #     else None
-            # ),
-            all_timestamps=None,
+            all_timestamps=all_timestamps,
             invalid_attn_mask=1.0 - self._attn_mask.to(float_dtype),
             delta_x_offsets=delta_x_offsets,
             cache=cache,

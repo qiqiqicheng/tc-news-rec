@@ -43,6 +43,9 @@ class TCDataset(torch.utils.data.Dataset):
         chronological: bool = True,
         sample_ratio: float = 1.0,
         additional_columns: Optional[List[str]] = [],
+        sliding_window_augment: bool = False,
+        sliding_window_step: int = 1,
+        sliding_window_min_len: int = 3,
     ):
         """
         Args:
@@ -54,6 +57,9 @@ class TCDataset(torch.utils.data.Dataset):
             chronological (bool, optional): True for increase chronology. Defaults to True.
             sample_ratio (float, optional): _description_. Defaults to 1.0.
             additional_columns (Optional[List[str]], optional): _description_. Defaults to [].
+            sliding_window_augment (bool, optional): Enable sliding window augmentation for long sequences. Defaults to False.
+            sliding_window_step (int, optional): Step size for sliding window. Defaults to 1.
+            sliding_window_min_len (int, optional): Minimum sequence length to apply augmentation. Defaults to 3.
         """
         super().__init__()
 
@@ -66,12 +72,48 @@ class TCDataset(torch.utils.data.Dataset):
         self._additional_columns = additional_columns
         self._cache = dict()
 
+        # Sliding window augmentation
+        self._sliding_window_augment = sliding_window_augment
+        self._sliding_window_step = sliding_window_step
+        self._sliding_window_min_len = sliding_window_min_len
+
+        # Build augmented sample index: list of (row_idx, window_end_idx)
+        # window_end_idx is the index of the target item in the original sequence
+        self._sample_index = self._build_sample_index()
+
         if isinstance(embedding_data, str):
             self._embedding_data = load_data(embedding_data)
         else:
             self._embedding_data = embedding_data
 
         self._additional_columns_check()
+
+    def _build_sample_index(self) -> List[Tuple[int, int]]:
+        """
+        Build sample index for sliding window augmentation.
+        Returns list of (row_idx, window_end_idx) tuples.
+        window_end_idx indicates how many items to use (target is at this index).
+        """
+        sample_index = []
+
+        for row_idx in range(len(self.df)):
+            data = self.df.iloc[row_idx]
+            seq = eval(data["sequence_item_ids"])
+            seq_len = len(seq) if isinstance(seq, (list, tuple)) else 1
+
+            if self._sliding_window_augment and seq_len >= self._sliding_window_min_len:
+                # Generate multiple samples using sliding window
+                # Start from min_len, step by sliding_window_step
+                for end_idx in range(self._sliding_window_min_len, seq_len + 1, self._sliding_window_step):
+                    sample_index.append((row_idx, end_idx))
+            else:
+                # Use full sequence (end_idx = -1 means use all)
+                sample_index.append((row_idx, -1))
+
+        if self._sliding_window_augment:
+            log.info(f"Sliding window augmentation: {len(self.df)} users -> {len(sample_index)} samples")
+
+        return sample_index
 
     def _additional_columns_check(self):
         if self._additional_columns:
@@ -93,7 +135,7 @@ class TCDataset(torch.utils.data.Dataset):
             log.info(f"Additional columns status: {columns_status}")
 
     def __len__(self) -> int:
-        return len(self.df)
+        return len(self._sample_index)
 
     def __getitem__(self, index) -> Dict[str, torch.Tensor]:
         if index in self._cache:
@@ -103,14 +145,19 @@ class TCDataset(torch.utils.data.Dataset):
         return sample
 
     def load_sample(self, index: int) -> Dict[str, torch.Tensor]:
-        data = self.df.iloc[index]
+        # Get row index and window end index from sample index
+        row_idx, window_end_idx = self._sample_index[index]
+        data = self.df.iloc[row_idx]
         user_id = data["user_id_mapped"]
 
-        def eval_as_list(x, ignore_last_n: int) -> List[int]:
+        def eval_as_list(x, ignore_last_n: int, window_end: int = -1) -> List[int]:
             y = eval(x)
             y_list = [y] if isinstance(y, int) else list(y)
             if ignore_last_n > 0:
                 y_list = y_list[:-ignore_last_n]
+            # Apply sliding window truncation
+            if window_end > 0:
+                y_list = y_list[:window_end]
             return y_list
 
         def prepare_sequence_ids(
@@ -118,8 +165,9 @@ class TCDataset(torch.utils.data.Dataset):
             ignore_last_n: int,
             shifted_by: int,
             sampling_kept_mask: Optional[List[bool]] = None,
+            window_end: int = -1,
         ) -> Tuple[List[int], int]:
-            y = eval_as_list(x, ignore_last_n)
+            y = eval_as_list(x, ignore_last_n, window_end)
             if sampling_kept_mask:
                 y = [item for item, keep in zip(y, sampling_kept_mask) if keep]
             if shifted_by > 0:
@@ -128,7 +176,7 @@ class TCDataset(torch.utils.data.Dataset):
             return y, seq_len
 
         if self._sample_ratio < 1.0:
-            raw_length = len(eval_as_list(data.sequence_item_ids, self._ignore_last_n))
+            raw_length = len(eval_as_list(data.sequence_item_ids, self._ignore_last_n, window_end_idx))
             sampling_kept_mask = (torch.rand((raw_length,), dtype=torch.float32) < self._sample_ratio).tolist()
         else:
             sampling_kept_mask = None
@@ -136,48 +184,56 @@ class TCDataset(torch.utils.data.Dataset):
         item_id_history, item_id_history_len = prepare_sequence_ids(
             data["sequence_item_ids"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=self._shift_id_by,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_click_time_history, item_click_time_history_len = prepare_sequence_ids(
             data["sequence_timestamps"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_category_id_history, item_category_id_history_len = prepare_sequence_ids(
             data["sequence_category_ids"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_created_at_history, item_created_at_history_len = prepare_sequence_ids(
             data["sequence_created_at_ts"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_words_count_history, item_words_count_history_len = prepare_sequence_ids(
             data["sequence_words_count"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_age_history, item_age_history_len = prepare_sequence_ids(
             data["age_bucket"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_hour_history, item_hour_history_len = prepare_sequence_ids(
             data["hour_of_day"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
         item_day_history, item_day_history_len = prepare_sequence_ids(
             data["day_of_week"],
             ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
@@ -336,6 +392,9 @@ class TCDataModule(L.LightningDataModule):
         prefetch_factor: int = 4,
         random_split: bool = True,
         split_ratios: List[float] = [0.8, 0.1, 0.1],
+        sliding_window_augment: bool = False,
+        sliding_window_step: int = 1,
+        sliding_window_min_len: int = 3,
     ) -> None:
         super().__init__()
         self.__dict__.update(locals())
@@ -351,6 +410,9 @@ class TCDataModule(L.LightningDataModule):
         self.prefetch_factor = prefetch_factor
         self.random_split = random_split
         self.split_ratios = split_ratios
+        self.sliding_window_augment = sliding_window_augment
+        self.sliding_window_step = sliding_window_step
+        self.sliding_window_min_len = sliding_window_min_len
         self.data_preprocessor = (
             hydra.utils.instantiate(data_preprocessor)
             if isinstance(data_preprocessor, DictConfig)
@@ -367,6 +429,7 @@ class TCDataModule(L.LightningDataModule):
         file: pd.DataFrame,
         embedding_data: Any,
         ignore_last_n: int = 0,
+        enable_augment: bool = False,
     ) -> TCDataset:
         kwargs = {}
         kwargs["padding_length"] = self.max_seq_length + 1
@@ -375,6 +438,10 @@ class TCDataModule(L.LightningDataModule):
         kwargs["file"] = file
         kwargs["embedding_data"] = embedding_data
         kwargs["ignore_last_n"] = ignore_last_n
+        # Only enable sliding window augmentation for training dataset
+        kwargs["sliding_window_augment"] = enable_augment and self.sliding_window_augment
+        kwargs["sliding_window_step"] = self.sliding_window_step
+        kwargs["sliding_window_min_len"] = self.sliding_window_min_len
 
         dataset = TCDataset(**kwargs)
         return dataset
@@ -403,12 +470,14 @@ class TCDataModule(L.LightningDataModule):
 
             if stage == "fit" or stage is None:
                 self.train_dataset = self.instantiate_dataset(
-                    file=train_df, embedding_data=embedding_data, ignore_last_n=0
+                    file=train_df, embedding_data=embedding_data, ignore_last_n=0, enable_augment=True
                 )
-                self.val_dataset = self.instantiate_dataset(file=val_df, embedding_data=embedding_data, ignore_last_n=0)
+                self.val_dataset = self.instantiate_dataset(
+                    file=val_df, embedding_data=embedding_data, ignore_last_n=0, enable_augment=False
+                )
             if stage == "test" or stage == "predict" or stage is None:
                 self.test_dataset = self.instantiate_dataset(
-                    file=test_df, embedding_data=embedding_data, ignore_last_n=0
+                    file=test_df, embedding_data=embedding_data, ignore_last_n=0, enable_augment=False
                 )
         else:
             # If not random split, we assume the file contains everything and we might need logic to split by time or user
