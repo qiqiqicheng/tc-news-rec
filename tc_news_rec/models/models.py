@@ -327,7 +327,11 @@ class RetreivalModel(BaseRecommender):
 
     def _update_candidate_embeddings(self) -> None:
         item_emb_module = self.preprocessor.get_item_id_embedding_module()
-        embeddings = item_emb_module.weight[1:].unsqueeze(0)  # [1, N, D]
+
+        # FIX: Ensure we only take embeddings corresponding to valid IDs
+        # The embedding module might have extra padding entries than the actual number of items in the index
+        num_objects = self.candidate_index.num_objects
+        embeddings = item_emb_module.weight[1 : 1 + num_objects].unsqueeze(0)  # [1, N, D]
 
         self.candidate_index.update_embeddings(self.negative_sampler.normalize_embeddings(embeddings))
 
@@ -421,11 +425,17 @@ class RetreivalModel(BaseRecommender):
         # supervision_weights: mask out padding positions
         supervision_weights = (supervision_ids != 0).float()  # [B, N-1]
 
+        # CRITICAL FIX: Normalize supervision_embeddings to match negative sampling
+        # Without this, positive samples have higher norms than negatives, causing
+        # the model to learn "higher norm = better" instead of meaningful similarity
+        supervision_embeddings = self.preprocessor.get_embedding_by_id(supervision_ids)
+        supervision_embeddings = self.negative_sampler.normalize_embeddings(supervision_embeddings)
+
         jagged_features = self.dense_to_jagged(
             lengths=supervision_lengths,
             output_embeddings=output_embeddings_for_loss,  # [B, N-1, D] -> [T, D]
             supervision_ids=supervision_ids,  # [B, N-1] -> [T,]
-            supervision_embeddings=self.preprocessor.get_embedding_by_id(supervision_ids),  # [B, N-1, D] -> [T, D]
+            supervision_embeddings=supervision_embeddings,  # [B, N-1, D] -> [T, D], now L2 normalized
             supervision_weights=supervision_weights,  # [B, N-1] -> [T,]
         )
 
@@ -496,11 +506,13 @@ class RetreivalModel(BaseRecommender):
         seq_feature, target_ids = get_sequential_features(
             batch, device=self.device, max_output_length=self.gr_output_length + 1
         )
-        top_k_ids, top_k_scores = self.retrieve(seq_features=seq_feature, k=self.k, filter_past_ids=True)
+        top_k_ids, top_k_scores = self.retrieve(seq_features=seq_feature, k=5, filter_past_ids=True)
+        # Note: batch["user_id"] is available in TCDataset
         return {
             "top_k_ids": top_k_ids,
             "top_k_scores": top_k_scores,
             "target_ids": target_ids,
+            "user_ids": batch.get("user_id"),
         }
 
     def on_predict_epoch_end(self) -> None:
@@ -512,6 +524,19 @@ class RetreivalModel(BaseRecommender):
                 predictions[0], dict
             ):  # NOTE: the predictions are List[Dict[str, Tensor]] of all batches
                 keys = predictions[0].keys()
-                converted_predictions = {key: sum((pred[key] for pred in predictions), []) for key in keys}
+                # Optimized concatenation for Tensors
+                converted_predictions = {}
+                for key in keys:
+                    first_val = predictions[0][key]
+                    if isinstance(first_val, torch.Tensor):
+                        # Use torch.cat for tensors (much faster than sum(..., []))
+                        converted_predictions[key] = torch.cat([pred[key] for pred in predictions])
+                    elif isinstance(first_val, list):
+                        # Use list extension for lists
+                        converted_predictions[key] = sum((pred[key] for pred in predictions), [])
+                    else:
+                        # Fallback for other types (or raise error)
+                        converted_predictions[key] = [pred[key] for pred in predictions]
+
                 self.trainer.predict_loop._predictions[i] = converted_predictions  # type: ignore
                 # final results -> Dict[str, List[Tensor]], normally the final results after prediction

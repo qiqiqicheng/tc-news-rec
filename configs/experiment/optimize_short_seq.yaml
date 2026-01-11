@@ -2,36 +2,29 @@
 defaults:
   - override /model: hstu
 
-# 优化策略总结:
-# 1. 损失函数优化: 提高 Temperature，防止 Loss 坍塌；增加负采样数量，提高任务难度。
-# 2. 学习率调度优化: 使用 CosineAnnealingWarmRestarts 代替 OneCycleLR，适应不同阶段的收敛。
-# 3. 数据过滤与增强: 过滤极短序列 (len < 3)，因为长度为 2 的序列 (1 history + 1 target) 信息量极低。
-# 4. 正则化: 增加 Dropout 防止过拟合 (因为序列普遍较短)。
+# ============================================================================
+# 优化策略总结 (v2 - 修复 Embedding Collapse):
+# ============================================================================
+# 问题诊断: 模型发生了严重的 Embedding Collapse，表现为:
+#   - Top-K 预测高度集中于少数几个 item (277107, 336221 等)
+#   - 这些 item 的 embedding 余弦相似度高达 0.99+
+#   - 它们的 embedding norm 异常大 (2.5+，而平均只有 0.3)
+#
+# 根本原因: 训练时正样本 embedding 未归一化，而负样本被归一化了
+#   - 模型学到的是 "norm 越大越好" 而非真正的语义相似性
+#   - 代码修复: models.py 中的 training_step 现在会对 supervision_embeddings 归一化
+#
+# 本配置的额外优化:
+# 1. 降低学习率，防止快速坍塌
+# 2. 增加 weight_decay，正则化 embedding norm
+# 3. 降低温度到 0.1，增加任务难度（但不是 0.05 那么极端）
+# 4. 增加负采样数量
+# ============================================================================
 
 model:
-  k: 20 # 召回 Top-20，评估指标更全面
-
-  # 优化器配置
   optimizer:
-    lr: 0.001 # 稍微提高初始学习率
-    weight_decay: 0.05 # 增加权重衰减，防止过拟合
-
-  # 针对短序列特性的 Scheduler 调整
-  # OneCycleLR 适合快速收敛，但在稀疏短序列上可能不稳定。
-  # 这里改用 CosineAnnealingWarmRestarts，允许周期性重启，探索更多局部最优
-  # scheduler:
-  #   _target_: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
-  #   _partial_: true
-  #   T_0: 2000 # 初始周期步数 (约 1-2 epoch)
-  #   T_mult: 2 # 周期倍增
-  #   eta_min: 1e-6
-  #   # 显式移除 OneCycleLR 的特有参数，防止报错
-  #   max_lr: null
-  #   pct_start: null
-  #   div_factor: null
-  #   final_div_factor: null
-  #   anneal_strategy: null
-  #   total_steps: null
+    lr: 0.0005 # 降低学习率，防止快速坍塌
+    weight_decay: 0.1 # 增加权重衰减，显著正则化 embedding norm
 
   configure_optimizer_params:
     monitor: val/ndcg@5
@@ -42,9 +35,8 @@ model:
 
   # Preprocessor 优化
   preprocessor:
-    # 增加 Dropout，因为数据稀疏/序列短，容易过拟合
-    dropout_rate: 0.3
-    # 动态适应 max_seq_len (保持原逻辑)
+    # 适度 Dropout
+    dropout_rate: 0.2
 
   # Encoder 优化 (HSTU)
   sequence_encoder:
@@ -55,29 +47,27 @@ model:
     # 增加层数和头数，提升表达能力
     num_blocks: 4
     num_heads: 2
-    # 增加正则化
-    linear_dropout_rate: 0.3
+    # 适度正则化
+    linear_dropout_rate: 0.2
     attn_dropout_rate: 0.1
 
   # 损失函数核心优化
   loss:
     _target_: tc_news_rec.models.losses.losses.SampledSoftmaxLoss
-    # 关键修改 1: 增加负样本数量。36万物品只采128个负样本太容易了。
+    # 负样本数量：36万物品，1024个负样本
     num_to_sample: 1024
-    # 关键修改 2: 提高温度系数。原0.05导致Loss极其容易为0。
-    # 提高到 1.0 让模型关注难样本
-    softmax_temperature: 1.0
+    # 温度系数：0.1 比 0.05 更温和，但仍能关注难样本
+    # 不要设为 1.0，那样任务太简单，loss 下降慢但不一定学得更好
+    softmax_temperature: 0.1
 
 # Trainer 优化
 trainer:
-  # 梯度裁剪，防止训练初期梯度爆炸
+  # 梯度裁剪，防止梯度爆炸
   gradient_clip_val: 1.0
-  # 积累梯度，模拟更大的 Batch Size (如果显存允许)
-  accumulate_grad_batches: 2
-  # 验证频率：每 2000 step 验证一次 (约半个 epoch)
-  val_check_interval: 2000
+  # 不使用梯度累积，保持简单
+  accumulate_grad_batches: 1
+  # 验证频率
+  val_check_interval: 500
   log_every_n_steps: 50
-
-# Data Module 覆盖 (需要在 train.yaml 或命令行中生效，通过 experiment 覆盖较难，这里作为备注)
-# 建议在 data/default.yaml 中修改:
-# batch_size: 64 (增大 Batch Size 有助采样覆盖)
+  # 增加 epoch 数量，让模型充分学习
+  max_epochs: 10

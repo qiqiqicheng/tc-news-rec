@@ -46,3 +46,8 @@ help:
 train:
 	@echo "🚀 Training model"
 	@uv run python tc_news_rec/scripts/train.py $(MAKEOVERRIDES)
+
+.PHONY: predict
+predict:
+	@echo "🚀 Predicting with model"
+	@uv run python tc_news_rec/scripts/predict.py $(MAKEOVERRIDES)

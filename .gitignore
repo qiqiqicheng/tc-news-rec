@@ -9,6 +9,9 @@ user_data/
 # logs
 logs/
 
+# prediction
+prediction_results/
+
 # ckpt
 checkpoints/
 

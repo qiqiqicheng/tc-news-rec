@@ -406,7 +406,7 @@ class TCDataModule(L.LightningDataModule):
                     file=train_df, embedding_data=embedding_data, ignore_last_n=0
                 )
                 self.val_dataset = self.instantiate_dataset(file=val_df, embedding_data=embedding_data, ignore_last_n=0)
-            if stage == "test" or stage is None:
+            if stage == "test" or stage == "predict" or stage is None:
                 self.test_dataset = self.instantiate_dataset(
                     file=test_df, embedding_data=embedding_data, ignore_last_n=0
                 )
