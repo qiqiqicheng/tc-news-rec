@@ -1,0 +1,71 @@
+# @package _global_
+defaults:
+  - override /model: hstu
+  - override /data: large
+
+# ============================================================================
+# Experiment 3: InfoNCE + Large Batch + More Negatives
+# ============================================================================
+#
+# Hypothesis: Contrastive learning benefits from more negatives per batch.
+# Larger batch = more diverse negatives = better representations.
+#
+# Changes from baseline:
+# - Larger batch size (512 vs 256)
+# - More negative samples (2048 vs 1024)
+# - Gradient accumulation to simulate even larger effective batch
+# - Higher initial temperature to handle harder task
+# ============================================================================
+
+tags: ["infonce", "large-batch", "more-negatives", "experiment"]
+
+model:
+  optimizer:
+    lr: 0.0003                  # Lower LR for larger batch
+    weight_decay: 0.1
+
+  configure_optimizer_params:
+    monitor: val/mrr
+    mode: max
+
+  item_embedding_dim: 128
+
+  preprocessor:
+    dropout_rate: 0.2
+    content_emb_mlp: true
+    content_emb_hidden_dim: 512
+
+  sequence_encoder:
+    embedding_dim: ${model.item_embedding_dim}
+    item_embedding_dim: ${model.item_embedding_dim}
+    attention_dim: ${model.item_embedding_dim}
+    linear_dim: ${model.item_embedding_dim}
+    num_blocks: 4
+    num_heads: 2
+    linear_dropout_rate: 0.2
+    attn_dropout_rate: 0.1
+
+  negative_sampler:
+    _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
+    l2_normalize: true
+
+  loss:
+    _target_: tc_news_rec.models.losses.losses.InfoNCELossWithAnnealing
+    num_to_sample: 2048         # More negatives
+    initial_temperature: 0.6    # Higher start for harder task
+    final_temperature: 0.05
+    anneal_steps: 8000
+    use_hard_negatives: false
+
+data:
+  sliding_window_augment: true
+  sliding_window_step: 2
+  sliding_window_min_len: 3
+  batch_size: 512               # Larger batch
+
+trainer:
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 2    # Effective batch = 1024
+  val_check_interval: 250       # More frequent validation (fewer steps per epoch)
+  log_every_n_steps: 25
+  max_epochs: 15

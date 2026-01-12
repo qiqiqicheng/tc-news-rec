@@ -3,7 +3,7 @@
 defaults:
   - _self_
   - data: large
-  - model: light_hstu
+  - model: hstu
   - callbacks: default
   - logger: wandb_csv
   - trainer: gpu

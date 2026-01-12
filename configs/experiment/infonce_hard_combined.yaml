@@ -1,0 +1,81 @@
+# @package _global_
+defaults:
+  - override /model: hstu
+  - override /data: large
+
+# ============================================================================
+# InfoNCE + Temperature Annealing + Hard Negatives (Combined)
+# ============================================================================
+#
+# This experiment combines:
+# 1. InfoNCE Loss with temperature annealing
+# 2. Hard negative mining (50% hard + 50% random)
+#
+# Rationale:
+# - Hard negatives force model to distinguish similar items
+# - Temperature annealing provides stable training dynamics
+# - The combination may help when random negatives are too easy
+#
+# Note: If model doesn't converge well, try:
+# - Reducing hard_negative_ratio to 0.3
+# - Increasing candidate_pool_size to 8192
+# - Starting with higher initial_temperature (0.7)
+# ============================================================================
+
+tags: ["infonce", "hard-negatives", "combined", "experiment"]
+
+model:
+  optimizer:
+    lr: 0.0005
+    weight_decay: 0.1
+
+  configure_optimizer_params:
+    monitor: val/mrr
+    mode: max
+
+  item_embedding_dim: 128
+
+  preprocessor:
+    dropout_rate: 0.2
+    content_emb_mlp: true
+    content_emb_hidden_dim: 512
+
+  sequence_encoder:
+    embedding_dim: ${model.item_embedding_dim}
+    item_embedding_dim: ${model.item_embedding_dim}
+    attention_dim: ${model.item_embedding_dim}
+    linear_dim: ${model.item_embedding_dim}
+    num_blocks: 4
+    num_heads: 2
+    linear_dropout_rate: 0.2
+    attn_dropout_rate: 0.1
+
+  # Hard Negative Sampler
+  negative_sampler:
+    _target_: tc_news_rec.models.negative_samplers.negative_samplers.HardNegativeSampler
+    l2_normalize: true
+    hard_negative_ratio: 0.5
+    candidate_pool_size: 4096
+
+  # InfoNCE Loss with Temperature Annealing + Hard Negatives
+  loss:
+    _target_: tc_news_rec.models.losses.losses.InfoNCELossWithAnnealing
+    num_to_sample: 1024
+    initial_temperature: 0.7    # Higher start for harder negatives
+    final_temperature: 0.07     # Slightly higher end for stability
+    anneal_steps: 8000
+    use_hard_negatives: true    # Enable hard negative mining
+
+data:
+  sliding_window_augment: true
+  sliding_window_step: 2
+  sliding_window_min_len: 3
+  batch_size: 256
+
+trainer:
+  devices: [2]
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 500
+  log_every_n_steps: 50
+  max_epochs: 15

@@ -1,0 +1,83 @@
+# @package _global_
+defaults:
+  - override /model: hstu
+  - override /data: large
+
+# ============================================================================
+# Experiment 1: InfoNCE + Temperature Annealing (Baseline)
+# ============================================================================
+#
+# Key Ideas:
+# 1. InfoNCE Loss: Contrastive loss that maximizes mutual information
+#    between query and positive item while minimizing it with negatives
+#
+# 2. Temperature Annealing:
+#    - Start with HIGH temperature (τ=0.5): Smoother distribution, better exploration
+#    - End with LOW temperature (τ=0.05): Sharper distribution, focused learning
+#    - Schedule: Exponential decay over training steps
+#
+# 3. Why it helps for short sequences:
+#    - High initial temperature prevents early overfitting to noisy signals
+#    - Gradual cooling lets model refine distinctions as it learns
+#    - Better gradient flow in early training
+#
+# Expected Behavior:
+# - Loss starts lower (due to smooth distribution)
+# - Gradually increases as temperature drops (harder task)
+# - MRR should improve more steadily vs fixed temperature
+# ============================================================================
+
+tags: ["infonce", "temperature-annealing", "baseline"]
+
+model:
+  optimizer:
+    lr: 0.0005
+    weight_decay: 0.1
+
+  configure_optimizer_params:
+    monitor: val/mrr
+    mode: max
+
+  item_embedding_dim: 128
+
+  preprocessor:
+    dropout_rate: 0.2
+    content_emb_mlp: true
+    content_emb_hidden_dim: 512
+
+  sequence_encoder:
+    embedding_dim: ${model.item_embedding_dim}
+    item_embedding_dim: ${model.item_embedding_dim}
+    attention_dim: ${model.item_embedding_dim}
+    linear_dim: ${model.item_embedding_dim}
+    num_blocks: 4
+    num_heads: 2
+    linear_dropout_rate: 0.2
+    attn_dropout_rate: 0.1
+
+  # Use GlobalNegativeSampler for simplicity (hard negatives didn't help)
+  negative_sampler:
+    _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
+    l2_normalize: true
+
+  # InfoNCE Loss with Temperature Annealing
+  loss:
+    _target_: tc_news_rec.models.losses.losses.InfoNCELossWithAnnealing
+    num_to_sample: 1024
+    initial_temperature: 0.5    # High temp at start (smooth gradients)
+    final_temperature: 0.05     # Low temp at end (sharp gradients)
+    anneal_steps: 10000         # ~10k steps to anneal
+    use_hard_negatives: false   # Disable hard negatives
+
+data:
+  sliding_window_augment: true
+  sliding_window_step: 2
+  sliding_window_min_len: 3
+  batch_size: 256
+
+trainer:
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  val_check_interval: 500
+  log_every_n_steps: 50
+  max_epochs: 15

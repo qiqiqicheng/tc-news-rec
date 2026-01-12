@@ -10,7 +10,10 @@ from omegaconf import DictConfig
 import tc_news_rec.models.utils.ops as ops
 from tc_news_rec.data.tc_dataset import TCDataModule
 from tc_news_rec.models.indexing.candidate_index import CandidateIndex
-from tc_news_rec.models.losses.losses import AutoregressiveLoss
+from tc_news_rec.models.losses.losses import (
+    AutoregressiveLoss,
+    InfoNCELossWithAnnealing,
+)
 from tc_news_rec.models.negative_samplers.negative_samplers import (
     GlobalNegativeSampler,
     HardNegativeSampler,
@@ -447,6 +450,17 @@ class RetreivalModel(BaseRecommender):
         )
 
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+
+        # Log temperature if using InfoNCE with annealing
+        if isinstance(self.loss_fn, InfoNCELossWithAnnealing):
+            self.log(
+                "train/temperature",
+                self.loss_fn.get_temperature(),
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True,
+            )
+
         return loss
 
     def on_validation_epoch_start(self) -> None:

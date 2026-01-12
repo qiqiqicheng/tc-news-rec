@@ -46,7 +46,10 @@ class GlobalNegativeSampler(NegativeSampler):
     def __init__(
         self,
         l2_normalize: bool = True,
+        *args,
+        **kwargs,
     ) -> None:
+        log.info(f"passing args: {args}, kwargs: {kwargs} to GlobalNegativeSampler")
         super().__init__()
         self._l2_normalize = l2_normalize
         self._item_emb: torch.nn.Embedding | None = None

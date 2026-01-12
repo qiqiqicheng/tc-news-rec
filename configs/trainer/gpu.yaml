@@ -3,4 +3,4 @@ defaults:
   - _self_
 
 accelerator: gpu
-devices: [3]
+devices: [6]
