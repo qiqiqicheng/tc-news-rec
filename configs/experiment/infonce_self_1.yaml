@@ -59,7 +59,7 @@ data:
   sliding_window_augment: true
   sliding_window_step: 2
   sliding_window_min_len: 3
-  batch_size: 64
+  batch_size: 128
 
 trainer:
   devices: [5]

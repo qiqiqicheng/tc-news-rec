@@ -1,11 +1,13 @@
 # @package _global_
 
 # 1. more heads
-# 2. much wider linear layer
-# 3. no negative sampler
+# 2. wider linear layer
+# 3. negative sampler with larger pool
 # 4. side window
-# 5. Slower annealing
-# 6. larger item embedding dim but smaller batch size
+# 5. more blocks
+# 6. Slower annealing
+# 7. larger item embedding dim but smaller batch size
+# 8. more samples in loss
 
 
 
@@ -28,37 +30,39 @@ model:
 
   preprocessor:
     dropout_rate: 0.25
-    content_emb_mlp: true
+    content_emb_mlp: false
     content_emb_hidden_dim: 512
 
   sequence_encoder:
     embedding_dim: ${model.item_embedding_dim}
     item_embedding_dim: ${model.item_embedding_dim}
     attention_dim: ${model.item_embedding_dim}
-    linear_dim: ${eval:${model.item_embedding_dim} * 4}  # Wider linear layer
-    num_blocks: 8               # Deeper
+    linear_dim: ${eval:${model.item_embedding_dim} * 3}  # Wider linear layer
+    num_blocks: 12               # Deeper
     num_heads: 8                # More heads
     linear_dropout_rate: 0.25
     attn_dropout_rate: 0.15
     gradient_checkpointing: true
 
   negative_sampler:
-    _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
+    _target_: tc_news_rec.models.negative_samplers.negative_samplers.HardNegativeSampler
     l2_normalize: true
+    hard_negative_ratio: 0.4
+    candidate_pool_size: 4096
 
   loss:
     _target_: tc_news_rec.models.losses.losses.InfoNCELossWithAnnealing
-    num_to_sample: 1024
+    num_to_sample: 2048
     initial_temperature: 0.5
     final_temperature: 0.05
-    anneal_steps: 20000
-    use_hard_negatives: false
+    anneal_steps: 10000
+    use_hard_negatives: true
 
 data:
   sliding_window_augment: true
-  sliding_window_step: 1
+  sliding_window_step: 2
   sliding_window_min_len: 3
-  batch_size: 64
+  batch_size: 32
 
 trainer:
   devices: [3]
@@ -67,4 +71,4 @@ trainer:
   gradient_clip_val: 1.0
   val_check_interval: 500
   log_every_n_steps: 50
-  max_epochs: 30
+  max_epochs: 20
