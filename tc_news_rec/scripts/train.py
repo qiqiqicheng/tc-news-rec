@@ -21,6 +21,8 @@ OmegaConf.register_new_resolver("eval", eval)
 torch.multiprocessing.set_sharing_strategy("file_system")
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
+torch.set_float32_matmul_precision("medium")
+
 
 def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """

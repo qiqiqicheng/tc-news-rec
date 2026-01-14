@@ -422,11 +422,13 @@ class HSTUJagged(torch.nn.Module):
         self,
         modules: List[SequentialTransductionUnitJagged],
         autocast_dtype: torch.dtype,
+        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
 
         self._attention_layers: torch.nn.ModuleList = torch.nn.ModuleList(modules=modules)
         self._autocast_dtype: torch.dtype = autocast_dtype
+        self._gradient_checkpointing = gradient_checkpointing
 
     def jagged_forward(
         self,
@@ -457,15 +459,37 @@ class HSTUJagged(torch.nn.Module):
             dtype=self._autocast_dtype or torch.float16,
         ):
             for i, layer in enumerate(self._attention_layers):
-                x, cache_states_i = layer(
-                    x=x,
-                    x_offsets=x_offsets,
-                    all_timestamps=all_timestamps,
-                    invalid_attn_mask=invalid_attn_mask,
-                    delta_x_offsets=delta_x_offsets,
-                    cache=cache[i] if cache is not None else None,
-                    return_cache_states=return_cache_states,
-                )
+                if self.training and self._gradient_checkpointing:
+                    # Use gradient checkpointing to save memory
+                    def create_custom_forward(module):
+                        def custom_forward(*inputs):
+                            return module(*inputs)
+
+                        return custom_forward
+
+                    # Note: checkpoint requires at least one input to have requires_grad=True.
+                    # x typically has it.
+                    x, cache_states_i = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(layer),
+                        x,
+                        x_offsets,
+                        all_timestamps,
+                        invalid_attn_mask,
+                        delta_x_offsets,
+                        cache[i] if cache is not None else None,
+                        return_cache_states,
+                        use_reentrant=False,
+                    )
+                else:
+                    x, cache_states_i = layer(
+                        x=x,
+                        x_offsets=x_offsets,
+                        all_timestamps=all_timestamps,
+                        invalid_attn_mask=invalid_attn_mask,
+                        delta_x_offsets=delta_x_offsets,
+                        cache=cache[i] if cache is not None else None,
+                        return_cache_states=return_cache_states,
+                    )
                 if return_cache_states:
                     cache_states.append(cache_states_i)
 
@@ -538,6 +562,7 @@ class HSTU(torch.nn.Module):
         attn_dropout_rate: float,
         enable_relative_attention_bias: bool = True,
         concat_ua: bool = False,
+        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
 
@@ -579,6 +604,7 @@ class HSTU(torch.nn.Module):
                 for _ in range(num_blocks)
             ],
             autocast_dtype=None,
+            gradient_checkpointing=gradient_checkpointing,
         )
         # causal forward, w/ +1 for padding.
         self.register_buffer(

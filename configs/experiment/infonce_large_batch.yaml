@@ -58,12 +58,13 @@ model:
     use_hard_negatives: false
 
 data:
-  sliding_window_augment: true
-  sliding_window_step: 2
-  sliding_window_min_len: 3
+  sliding_window_augment: false
+  # sliding_window_step: 2
+  # sliding_window_min_len: 3
   batch_size: 512               # Larger batch
 
 trainer:
+  devices: [2]
   gradient_clip_val: 1.0
   accumulate_grad_batches: 2    # Effective batch = 1024
   val_check_interval: 250       # More frequent validation (fewer steps per epoch)
