@@ -1,0 +1,49 @@
+# @package _global_
+defaults:
+  - override /model: hstu
+  - override /data: large
+
+# ============================================================================
+# Experiment: DIN Baseline
+# ============================================================================
+#
+# Implementation of Deep Interest Network (DIN) Local Activation Unit
+# adapted for sequential retrieval.
+#
+# ============================================================================
+
+tags: ["din", "baseline"]
+
+model:
+  optimizer:
+    lr: 0.0005
+    weight_decay: 0.01
+
+  configure_optimizer_params:
+    monitor: val/mrr
+    mode: max
+
+  item_embedding_dim: 128
+
+  # DIN relies on item embeddings heavily
+  preprocessor:
+    dropout_rate: 0.1
+    content_emb_mlp: true
+    content_emb_hidden_dim: 512
+
+  sequence_encoder:
+    _target_: tc_news_rec.models.sequential_encoders.din.DINEncoder
+    embedding_dim: ${model.item_embedding_dim}
+    hidden_dim: 256
+    dropout_rate: 0.1
+
+  negative_sampler:
+    _target_: tc_news_rec.models.negative_samplers.negative_samplers.GlobalNegativeSampler
+    l2_normalize: true
+
+  # Using SampledSoftmaxLoss as baseline loss
+  loss:
+    _target_: tc_news_rec.models.losses.losses.SampledSoftmaxLoss
+
+trainer:
+  devices: [2]
