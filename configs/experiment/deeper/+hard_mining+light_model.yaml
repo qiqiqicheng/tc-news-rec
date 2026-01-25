@@ -3,20 +3,6 @@ defaults:
   - override /model: hstu
   - override /data: large
 
-# ============================================================================
-# Experiment 4: InfoNCE + Deeper Model
-# ============================================================================
-#
-# Hypothesis: Deeper model may capture more complex user behavior patterns.
-# May help with short sequences by learning better position-aware representations.
-#
-# Changes from baseline:
-# - More transformer blocks (8 vs 4)
-# - More attention heads (4 vs 2)
-# - Larger embedding dimension (256 vs 128)
-# - Slightly higher dropout for regularization
-# ============================================================================
-
 tags: ["infonce", "deeper-model", "experiment"]
 
 model:
@@ -39,8 +25,8 @@ model:
     embedding_dim: ${model.item_embedding_dim}
     item_embedding_dim: ${model.item_embedding_dim}
     attention_dim: ${model.item_embedding_dim}
-    linear_dim: ${model.item_embedding_dim}
-    num_blocks: 8               # Deeper
+    linear_dim: ${eval:${model.item_embedding_dim} * 2}
+    num_blocks: 6               # Deeper
     num_heads: 4                # More heads
     linear_dropout_rate: 0.25
     attn_dropout_rate: 0.15
@@ -49,24 +35,29 @@ model:
     _target_: tc_news_rec.models.negative_samplers.negative_samplers.HardNegativeSampler
     l2_normalize: true
     hard_negative_ratio: 0.5
-    candidate_pool_size: 4096
+    candidate_pool_size: 8192
 
   loss:
     _target_: tc_news_rec.models.losses.losses.InfoNCELossWithAnnealing
-    num_to_sample: 1024
+    num_to_sample: 2048
     initial_temperature: 0.5
     final_temperature: 0.05
     anneal_steps: 10000
-    use_hard_negatives: false
+    use_hard_negatives: true
 
 data:
   sliding_window_augment: true
   sliding_window_step: 2
   sliding_window_min_len: 3
-  batch_size: 256
+  batch_size: 200
+
+logger:
+  wandb:
+    name: "hard_mining+light_model"
+    group: "deeper-model"
 
 trainer:
-  devices: [6]
+  devices: [5]
   gradient_clip_val: 1.0
   val_check_interval: 500
   log_every_n_steps: 50

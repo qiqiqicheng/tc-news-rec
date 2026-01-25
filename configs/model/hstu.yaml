@@ -85,7 +85,7 @@ sequence_encoder:
 postprocessor:
   _target_: tc_news_rec.models.postprocessors.postprocessors.L2NormEmbeddingPostprocessor
   embedding_dim: ${model.item_embedding_dim}
-  eps: 1e-6
+  eps: 1e-5  # Increased for better numerical stability on GPU
 
 similarity:
   _target_: tc_news_rec.models.similarity.similarity.DotProductSimilarity

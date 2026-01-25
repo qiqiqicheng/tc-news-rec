@@ -5,7 +5,7 @@ import hydra
 import lightning as L
 import torch
 import torchmetrics
-from omegaconf import DictConfig
+from omegaconf import DictConfig, open_dict
 
 import tc_news_rec.models.utils.ops as ops
 from tc_news_rec.data.tc_dataset import TCDataModule
@@ -64,9 +64,41 @@ class BaseRecommender(L.LightningModule):
         self.optimizer: torch.optim.Optimizer = (
             hydra.utils.instantiate(optimizer) if isinstance(optimizer, DictConfig) else optimizer
         )
-        self.scheduler: torch.optim.lr_scheduler.LRScheduler = (
-            hydra.utils.instantiate(scheduler) if isinstance(scheduler, DictConfig) else scheduler
-        )
+        if isinstance(scheduler, DictConfig):
+            # Clean up scheduler config to remove arguments not supported by the target class
+            # This handles cases where configs merge and leave behind incompatible keys (e.g. T_0 for OneCycleLR)
+            try:
+                import inspect
+
+                target_cls_name = scheduler.get("_target_")
+                if target_cls_name:
+                    target_cls = hydra.utils.get_class(target_cls_name)
+                    sig = inspect.signature(target_cls)
+                    allowed_args = set(sig.parameters.keys())
+
+                    # Create a mutable copy to modify
+                    clean_scheduler = scheduler.copy()
+                    keys_to_remove = []
+                    for key in clean_scheduler.keys():
+                        if key.startswith("_"):
+                            continue  # Keep hydra keys
+                        if key not in allowed_args:
+                            keys_to_remove.append(key)
+
+                    for key in keys_to_remove:
+                        log.info(f"Removing key '{key}' from {target_cls_name} config as it is not allowed")
+                        # Use structure manipulation for DictConfig
+                        with open_dict(clean_scheduler):
+                            del clean_scheduler[key]
+
+                    self.scheduler = hydra.utils.instantiate(clean_scheduler)
+                else:
+                    self.scheduler = hydra.utils.instantiate(scheduler)
+            except Exception as e:
+                log.warning(f"Failed to auto-filter scheduler args: {e}. Fallback to standard instantiation.")
+                self.scheduler = hydra.utils.instantiate(scheduler)
+        else:
+            self.scheduler = scheduler
 
         self.configure_optimizer_params: DictConfig = configure_optimizer_params
 
@@ -162,12 +194,27 @@ class BaseRecommender(L.LightningModule):
             dict[str, Any]: A dict containing the configured optimizers and learning-rate
                 schedulers to be used for training.
         """
+        import inspect
+
         optimizer = self.optimizer(params=self.parameters())  # type: ignore
         if self.scheduler is not None:
-            scheduler_kwargs = {}
-            # If the scheduler is OneCycleLR, we need to pass total_steps
-            if hasattr(self.scheduler, "func") and self.scheduler.func == torch.optim.lr_scheduler.OneCycleLR:
-                scheduler_kwargs["total_steps"] = self.trainer.estimated_stepping_batches
+            # Prepare potential dynamic arguments
+            available_kwargs = {
+                "total_steps": self.trainer.estimated_stepping_batches,
+                # Add other potential dynamic args here if needed
+            }
+
+            # Inspect the scheduler class (wrapped in partial) to see what it accepts
+            scheduler_cls = self.scheduler.func if hasattr(self.scheduler, "func") else self.scheduler
+
+            # If it's a class (not a function), check its __init__ signature
+            if isinstance(scheduler_cls, type):
+                sig = inspect.signature(scheduler_cls.__init__)
+            else:
+                sig = inspect.signature(scheduler_cls)
+
+            # Filter available_kwargs to only those accepted by the scheduler
+            scheduler_kwargs = {k: v for k, v in available_kwargs.items() if k in sig.parameters}
 
             scheduler = self.scheduler(optimizer=optimizer, **scheduler_kwargs)  # type: ignore
             return {
@@ -326,7 +373,26 @@ class RetreivalModel(BaseRecommender):
                 max_lengths=seq_features.past_ids.size(1),
             )
 
+        # Debug: Check for NaN BEFORE postprocessor
+        if torch.isnan(encoded_embeddings).any():
+            log.error(f"NaN detected BEFORE postprocessor (from encoder)! Shape: {encoded_embeddings.shape}")
+            log.error(f"NaN count: {torch.isnan(encoded_embeddings).sum().item()}")
+
+        # Check for zero-norm vectors that will cause NaN in L2 normalization
+        norms = torch.norm(encoded_embeddings, p=2, dim=-1, keepdim=True)
+        zero_norm_count = (norms < 1e-6).sum().item()
+        # if zero_norm_count > 0:
+        #     log.warning(
+        #         f"Found {zero_norm_count} vectors with near-zero norm before L2 normalization"
+        #     )
+
         encoded_embeddings = self.postprocessor(encoded_embeddings)
+
+        # Debug: Check for NaN after postprocessor
+        if torch.isnan(encoded_embeddings).any():
+            log.error(f"NaN detected after postprocessor! Shape: {encoded_embeddings.shape}")
+            log.error(f"NaN count: {torch.isnan(encoded_embeddings).sum().item()}")
+
         return encoded_embeddings, valid_lengths, cached_states
 
     def _update_candidate_embeddings(self) -> None:
@@ -363,6 +429,15 @@ class RetreivalModel(BaseRecommender):
         if self.candidate_index.embeddings is None:
             log.info("Initializing candidate index embeddings with current item embeddings")
             self._update_candidate_embeddings()
+
+        if torch.isnan(current_embeddings).any():
+            log.error("NaN detected in query embeddings during retrieval!")
+            log.error(f"Query embeddings shape: {current_embeddings.shape}")
+            log.error(f"NaN count: {torch.isnan(current_embeddings).sum().item()}")
+            log.error(f"valid_lengths: {valid_lengths}")
+            # Replace NaN with zeros as emergency fallback
+            current_embeddings = torch.nan_to_num(current_embeddings, nan=0.0)
+            log.warning("Replaced NaN with zeros to continue execution")
 
         top_k_ids, top_k_scores = self.candidate_index.get_top_k_outputs(
             query_embeddings=current_embeddings,

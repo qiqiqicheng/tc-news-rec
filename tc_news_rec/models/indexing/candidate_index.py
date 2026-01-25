@@ -109,6 +109,10 @@ class CandidateIndex(torch.nn.Module):
         # TODO: understand the vectorized invalid id removal and torch functions used
         if invalid_ids is not None:
             # Check for invalid ids: [B, K', N] -> [B, K']
+            # Ensure invalid_ids moves to the same device as query_ids
+            if invalid_ids.device != top_k_prime_ids.device:
+                invalid_ids = invalid_ids.to(top_k_prime_ids.device)
+
             is_invalid = (top_k_prime_ids.unsqueeze(2) == invalid_ids.unsqueeze(1)).any(dim=2)
 
             # Mask scores of invalid items with -inf

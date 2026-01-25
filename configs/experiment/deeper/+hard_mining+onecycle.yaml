@@ -1,0 +1,83 @@
+# @package _global_
+defaults:
+  - override /model: hstu
+  - override /data: large
+
+# ============================================================================
+# Experiment 4: InfoNCE + Deeper Model
+# ============================================================================
+#
+# Hypothesis: Deeper model may capture more complex user behavior patterns.
+# May help with short sequences by learning better position-aware representations.
+#
+# Changes from baseline:
+# - More transformer blocks (8 vs 4)
+# - More attention heads (4 vs 2)
+# - Larger embedding dimension (256 vs 128)
+# - Slightly higher dropout for regularization
+# ============================================================================
+
+tags: ["infonce", "deeper-model", "experiment"]
+
+model:
+  optimizer:
+    lr: 0.0003                  # Lower LR for larger model
+    weight_decay: 0.15          # More regularization
+
+  scheduler:
+    _target_: torch.optim.lr_scheduler.OneCycleLR
+    _partial_: true
+    max_lr: 0.0005
+    pct_start: 0.05
+    div_factor: 25.0
+    final_div_factor: 1000.0
+    anneal_strategy: 'cos'
+    total_steps: ???
+
+  configure_optimizer_params:
+    monitor: val/mrr
+    mode: max
+
+  item_embedding_dim: 256       # Larger embeddings
+
+  preprocessor:
+    dropout_rate: 0.25
+    content_emb_mlp: true
+    content_emb_hidden_dim: 512
+
+  sequence_encoder:
+    embedding_dim: ${model.item_embedding_dim}
+    item_embedding_dim: ${model.item_embedding_dim}
+    attention_dim: ${model.item_embedding_dim}
+    linear_dim: ${model.item_embedding_dim}
+    num_blocks: 8               # Deeper
+    num_heads: 4                # More heads
+    linear_dropout_rate: 0.25
+    attn_dropout_rate: 0.15
+
+  negative_sampler:
+    _target_: tc_news_rec.models.negative_samplers.negative_samplers.HardNegativeSampler
+    l2_normalize: true
+    hard_negative_ratio: 0.5
+    candidate_pool_size: 8192
+
+  loss:
+    _target_: tc_news_rec.models.losses.losses.InfoNCELossWithAnnealing
+    num_to_sample: 2048
+    initial_temperature: 0.5
+    final_temperature: 0.05
+    anneal_steps: 10000
+    use_hard_negatives: true
+
+data:
+  sliding_window_augment: true
+  sliding_window_step: 2
+  sliding_window_min_len: 3
+  batch_size: 200
+
+trainer:
+  devices: [2]
+  gradient_clip_val: 1.0
+  val_check_interval: 500
+  log_every_n_steps: 50
+  max_epochs: 20
