@@ -80,6 +80,13 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     train_metrics = trainer.callback_metrics
 
+    # Validate with the best checkpoint to ensure we see the best metrics
+    if cfg.get("train") and not cfg.get("test"):
+        ckpt_path = trainer.checkpoint_callback.best_model_path
+        if ckpt_path:
+            log.info(f"Validating with best model: {ckpt_path}")
+            trainer.validate(model=model, datamodule=datamodule, ckpt_path=ckpt_path, weights_only=False)
+
     if cfg.get("test"):
         log.info("Starting testing!")
         ckpt_path = trainer.checkpoint_callback.best_model_path  # type: ignore

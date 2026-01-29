@@ -103,6 +103,7 @@ class AllEmbeddingsInputPreprocessor(InputPreprocessor):
             "category_id",
             "created_at",
             "words_count",
+            "popularity",
             "age",
             "hour_of_day",
             "day_of_week",

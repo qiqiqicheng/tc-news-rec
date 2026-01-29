@@ -12,7 +12,7 @@ defaults:
 
   # experiment configs allow for version control of specific hyperparameters
   # e.g. best hyperparameters for given model and datamodule
-  - experiment: null
+  - experiment: deeper/+hard_mining
 
   # config for hyperparameter optimization
   - hparams_search: null
@@ -43,7 +43,7 @@ test: False
 ckpt_path: null
 
 # seed for random number generators in pytorch, numpy and python.random
-seed: 4221
+seed: 985
 
 # optimized metric for hyperparameter optimization
 optimized_metric: "val/mrr"

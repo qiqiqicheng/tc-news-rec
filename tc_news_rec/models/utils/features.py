@@ -28,6 +28,7 @@ def get_sequential_features(
         "historical_item_category_ids": "category_id",
         "historical_item_created_ats": "created_at",
         "historical_item_words_counts": "words_count",
+        "historical_item_popularities": "popularity",
         "historical_item_ages": "age",
         "historical_item_hours": "hour_of_day",
         "historical_item_days": "day_of_week",

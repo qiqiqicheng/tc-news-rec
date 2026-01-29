@@ -148,7 +148,7 @@ class TCDataset(torch.utils.data.Dataset):
         # Get row index and window end index from sample index
         row_idx, window_end_idx = self._sample_index[index]
         data = self.df.iloc[row_idx]
-        user_id = data["user_id_mapped"]
+        user_id = data["user_id"]
 
         def eval_as_list(x, ignore_last_n: int, window_end: int = -1) -> List[int]:
             y = eval(x)
@@ -216,6 +216,13 @@ class TCDataset(torch.utils.data.Dataset):
             shifted_by=0,
             sampling_kept_mask=sampling_kept_mask,
         )
+        item_popularity_history, item_popularity_history_len = prepare_sequence_ids(
+            data["sequence_popularity"],
+            ignore_last_n=self._ignore_last_n,
+            window_end=window_end_idx,
+            shifted_by=0,
+            sampling_kept_mask=sampling_kept_mask,
+        )
         item_age_history, item_age_history_len = prepare_sequence_ids(
             data["age_bucket"],
             ignore_last_n=self._ignore_last_n,
@@ -243,6 +250,7 @@ class TCDataset(torch.utils.data.Dataset):
             == item_category_id_history_len
             == item_created_at_history_len
             == item_words_count_history_len
+            == item_popularity_history_len
             == item_age_history_len
             == item_hour_history_len
             == item_day_history_len
@@ -265,6 +273,7 @@ class TCDataset(torch.utils.data.Dataset):
         historical_item_category_ids = item_category_id_history[:-1]
         historical_item_created_ats = item_created_at_history[:-1]
         historical_item_words_counts = item_words_count_history[:-1]
+        historical_item_popularities = item_popularity_history[:-1]
         historical_item_ages = item_age_history[:-1]
         historical_item_hours = item_hour_history[:-1]
         historical_item_days = item_day_history[:-1]
@@ -277,7 +286,8 @@ class TCDataset(torch.utils.data.Dataset):
             historical_item_click_times.reverse()
             historical_item_category_ids.reverse()
             historical_item_created_ats.reverse()
-            historical_item_words_counts.reverse()
+            historical_item_popularities.reverse()
+            historical_item_popularities.reverse()
             historical_item_ages.reverse()
             historical_item_hours.reverse()
             historical_item_days.reverse()
@@ -307,6 +317,11 @@ class TCDataset(torch.utils.data.Dataset):
         )
         historical_item_words_counts = truncate_or_pad(
             historical_item_words_counts,
+            target_len=max_seq_len,
+            chronological=self._chronological,
+        )
+        historical_item_popularities = truncate_or_pad(
+            historical_item_popularities,
             target_len=max_seq_len,
             chronological=self._chronological,
         )
@@ -361,6 +376,7 @@ class TCDataset(torch.utils.data.Dataset):
             "historical_item_category_ids": torch.tensor(historical_item_category_ids, dtype=torch.int64),
             "historical_item_created_ats": torch.tensor(historical_item_created_ats, dtype=torch.int64),
             "historical_item_words_counts": torch.tensor(historical_item_words_counts, dtype=torch.int64),
+            "historical_item_popularities": torch.tensor(historical_item_popularities, dtype=torch.int64),
             "historical_item_ages": torch.tensor(historical_item_ages, dtype=torch.int64),
             "historical_item_hours": torch.tensor(historical_item_hours, dtype=torch.int64),
             "historical_item_days": torch.tensor(historical_item_days, dtype=torch.int64),
@@ -463,28 +479,70 @@ class TCDataModule(L.LightningDataModule):
             train_len = int(n * self.split_ratios[0])
             val_len = int(n * self.split_ratios[1])
 
-            train_df = full_df.iloc[:train_len]
-            val_df = full_df.iloc[train_len : train_len + val_len]
+            train_df_split = full_df.iloc[:train_len]
+            val_df_split = full_df.iloc[train_len : train_len + val_len]
 
-            log.info(f"Split sizes: Train={len(train_df)}, Val={len(val_df)}, Test={len(test_df)}")
+            log.info(f"Split sizes: Train={len(train_df_split)}, Val={len(val_df_split)}, Test={len(test_df)}")
 
             if stage == "fit" or stage is None:
                 self.train_dataset = self.instantiate_dataset(
-                    file=train_df, embedding_data=embedding_data, ignore_last_n=0, enable_augment=True
+                    file=train_df_split,
+                    embedding_data=embedding_data,
+                    ignore_last_n=0,
+                    enable_augment=True,
                 )
                 self.val_dataset = self.instantiate_dataset(
-                    file=val_df, embedding_data=embedding_data, ignore_last_n=0, enable_augment=False
+                    file=val_df_split,
+                    embedding_data=embedding_data,
+                    ignore_last_n=0,
+                    enable_augment=False,
                 )
             if stage == "test" or stage == "predict" or stage is None:
                 self.test_dataset = self.instantiate_dataset(
-                    file=test_df, embedding_data=embedding_data, ignore_last_n=0, enable_augment=False
+                    file=test_df,
+                    embedding_data=embedding_data,
+                    ignore_last_n=0,
+                    enable_augment=False,
                 )
         else:
-            # If not random split, we assume the file contains everything and we might need logic to split by time or user
-            # But for now, let's just use the same file for all if random_split is False (or raise error as per previous logic)
-            # Or maybe the user intends to provide different files? But we only have one 'file' argument now.
-            # Assuming random_split is the primary mode as requested.
-            raise NotImplementedError("Non-random split strategy is not implemented yet.")
+            # Use full train dataset for training, and filtered test dataset for validation
+            log.info("Using explicit train/test file split strategy.")
+            log.info("Training set: Full content of train file.")
+            log.info("Validation set: Test file sequences with length > 2.")
+
+            if stage == "fit" or stage is None:
+                # Filter test_df for validation: sequence length > 2
+                # sequence_item_ids is a string of comma-separated ints, handled by eval() in dataset
+                # We can count commas for quick filtering: "1,2,3" (2 commas, length 3)
+                # length > 2 => count(",") >= 2
+                # NOTE: single item "1" has 0 commas. pair "1,2" has 1 comma.
+                # So length > 2 means >= 3 items, means >= 2 commas.
+                mask = test_df["sequence_item_ids"].apply(lambda x: str(x).count(",") >= 2)
+                val_df_filtered = test_df[mask].reset_index(drop=True)
+
+                log.info(f"Filtered validation set size: {len(val_df_filtered)} (Original: {len(test_df)})")
+
+                self.train_dataset = self.instantiate_dataset(
+                    file=train_df,
+                    embedding_data=embedding_data,
+                    ignore_last_n=0,
+                    enable_augment=True,
+                )
+                self.val_dataset = self.instantiate_dataset(
+                    file=val_df_filtered,
+                    embedding_data=embedding_data,
+                    ignore_last_n=0,
+                    enable_augment=False,
+                )
+
+            if stage == "test" or stage == "predict" or stage is None:
+                # For final test/prediction, we use the full test_df (predict next item)
+                self.test_dataset = self.instantiate_dataset(
+                    file=test_df,
+                    embedding_data=embedding_data,
+                    ignore_last_n=0,
+                    enable_augment=False,
+                )
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(

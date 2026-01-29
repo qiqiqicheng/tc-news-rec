@@ -598,12 +598,13 @@ class RetreivalModel(BaseRecommender):
         )
         top_k_ids, top_k_scores = self.retrieve(seq_features=seq_feature, k=5, filter_past_ids=True)
         # Note: batch["user_id"] is available in TCDataset
-        return {
+        ret = {
             "top_k_ids": top_k_ids,
             "top_k_scores": top_k_scores,
             "target_ids": target_ids,
             "user_ids": batch.get("user_id"),
         }
+        return ret
 
     def on_predict_epoch_end(self) -> None:
         """Lightning calls this at the end of the predict epoch."""

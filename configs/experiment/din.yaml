@@ -47,3 +47,8 @@ model:
 
 trainer:
   devices: [2]
+
+logger:
+  wandb:
+    name: "din_baseline"
+    group: "baseline"

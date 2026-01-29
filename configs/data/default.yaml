@@ -3,7 +3,7 @@ max_seq_length: 50
 batch_size: 32
 chronological: true
 sampling_ratio: 1.0
-random_split: true
+random_split: false
 split_ratios: [ 0.8, 0.1, 0.1 ]
 
 # Sliding window augmentation for long sequences

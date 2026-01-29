@@ -48,9 +48,55 @@ def predict(cfg: DictConfig):
     # You might need to specify the exact path if it's not in the config
     ckpt_path = cfg.get("ckpt_path")
     if not ckpt_path:
-        # Fallback to searching in the default log dir or user must provide it
-        # Assuming the user provides it via command line: ckpt_path=...
-        raise ValueError("Please provide a checkpoint path via ckpt_path=...")
+        log.info("ckpt_path not provided. Searching for the latest checkpoint in logs/train/runs...")
+        import glob
+
+        # Use cfg.paths.log_dir if available, otherwise assume 'logs' relative to root
+        root_dir = cfg.paths.root_dir
+        # The user specifically mentioned logs/train/runs
+        # We try to construct the path robustly
+        search_dir = os.path.join(root_dir, "logs", "train", "runs")
+
+        if not os.path.exists(search_dir):
+            raise ValueError(f"Cannot find search directory: {search_dir}. Please provide ckpt_path=...")
+
+        # Find all run directories
+        run_dirs = sorted(
+            [d for d in os.listdir(search_dir) if os.path.isdir(os.path.join(search_dir, d))],
+            reverse=True,
+        )
+
+        found_ckpt = None
+        for run_dir in run_dirs:
+            ckpt_dir = os.path.join(search_dir, run_dir, "checkpoints")
+            if os.path.exists(ckpt_dir):
+                # Look for .ckpt files
+                ckpts = glob.glob(os.path.join(ckpt_dir, "*.ckpt"))
+                if ckpts:
+                    best_ckpts = [c for c in ckpts if "best_model" in os.path.basename(c)]
+                    epoch_ckpts = [
+                        c for c in ckpts if "epoch=" in os.path.basename(c) or "epoch_" in os.path.basename(c)
+                    ]
+
+                    if best_ckpts:
+                        found_ckpt = best_ckpts[0]
+                    elif epoch_ckpts:
+                        # Sort by epoch number if possible, or name
+                        # Assuming name format epoch_016.ckpt -> sort reverse
+                        epoch_ckpts.sort(reverse=True)
+                        found_ckpt = epoch_ckpts[0]
+                    else:
+                        # Fallback to any ckpt, sorted by time
+                        ckpts.sort(key=os.path.getmtime, reverse=True)
+                        found_ckpt = ckpts[0]
+
+                    log.info(f"Found latest checkpoint in {run_dir}: {found_ckpt}")
+                    break
+
+        if found_ckpt:
+            ckpt_path = found_ckpt
+        else:
+            raise ValueError(f"No checkpoints found in {search_dir}. Please provide ckpt_path=...")
 
     log.info(f"Using checkpoint: {ckpt_path}")
 
@@ -86,92 +132,33 @@ def predict(cfg: DictConfig):
     # Convert keys to int
     item_map_reverse = {int(k): int(v) for k, v in item_map_reverse.items()}
 
-    # Reconstruct user mapping
-    # Logic from preprocessor.py:
-    # train_df = pd.read_csv("train_click_log.csv")
-    # test_df = pd.read_csv("testA_click_log.csv")
-    # all_users = pd.concat([train_df["user_id"], test_df["user_id"]]).unique()
-    # user_map = {u: i + 1 for i, u in enumerate(sorted(all_users))}
-    log.info("Reconstructing user mapping...")
-    train_df = pd.read_csv(os.path.join(data_dir, "train_click_log.csv"))
-    test_df = pd.read_csv(os.path.join(data_dir, "testA_click_log.csv"))
-    all_users = pd.concat([train_df["user_id"], test_df["user_id"]]).unique()
-    sorted_users = sorted(all_users)
-    user_map_reverse = {i + 1: u for i, u in enumerate(sorted_users)}
+    log.info("Loading user mapping... SKIPPED (Using original user IDs from dataset)")
+    # No user mapping needed as we use original IDs directly
 
     submission_data = []
 
     # Handle predictions structure
-    # Depending on Lightning version and on_predict_epoch_end implementation,
-    # predictions can be either:
-    # 1. A dict directly (single dataloader case, after on_predict_epoch_end modification)
-    # 2. A list containing dicts (one per dataloader)
-
     top_k_ids_list = None
     user_ids_list = None
 
+    def extract_tensors(pred_dict):
+        top_k = pred_dict["top_k_ids"]
+        u_ids = pred_dict["user_ids"]
+
+        # Handle list of tensors vs tensor
+        if isinstance(top_k, list):
+            top_k = torch.cat(top_k)
+            u_ids = torch.cat(u_ids)
+
+        return top_k, u_ids
+
     if isinstance(predictions, dict):
-        # Direct dict - predictions is already the concatenated result
-        log.info(f"Detected direct dict predictions with keys: {predictions.keys()}")
-
-        top_k_ids_val = predictions["top_k_ids"]
-        user_ids_val = predictions["user_ids"]
-
-        # If it's already a tensor (from on_predict_epoch_end concatenation)
-        if isinstance(top_k_ids_val, torch.Tensor):
-            log.info("Detected concatenated tensor predictions.")
-            top_k_ids_list = top_k_ids_val
-            user_ids_list = user_ids_val
-        # If it's a list of tensors, concatenate them
-        elif isinstance(top_k_ids_val, list) and len(top_k_ids_val) > 0:
-            if isinstance(top_k_ids_val[0], torch.Tensor):
-                log.info("Detected list of tensor predictions, concatenating...")
-                top_k_ids_list = torch.cat(top_k_ids_val)
-                user_ids_list = torch.cat(user_ids_val)
-            else:
-                log.error(f"Unexpected prediction value type in list: {type(top_k_ids_val[0])}")
-                return
-        else:
-            log.error(f"Unexpected prediction value type: {type(top_k_ids_val)}")
-            return
-
+        top_k_ids_list, user_ids_list = extract_tensors(predictions)
     elif isinstance(predictions, list) and len(predictions) > 0:
-        # List of dicts - get first dataloader's predictions
-        first_pred = predictions[0]
-        log.info(
-            f"Detected list predictions. First element type: {type(first_pred)}, keys: {first_pred.keys() if isinstance(first_pred, dict) else 'N/A'}"
-        )
+        # Assuming single dataloader for now
+        top_k_ids_list, user_ids_list = extract_tensors(predictions[0])
 
-        if isinstance(first_pred, dict):
-            # Check if values are already concatenated tensors or lists of tensors
-            top_k_ids_val = first_pred["top_k_ids"]
-            user_ids_val = first_pred["user_ids"]
-
-            # If it's already a tensor (from on_predict_epoch_end concatenation)
-            if isinstance(top_k_ids_val, torch.Tensor):
-                log.info("Detected concatenated tensor predictions.")
-                top_k_ids_list = top_k_ids_val
-                user_ids_list = user_ids_val
-            # If it's a list of tensors, concatenate them
-            elif (
-                isinstance(top_k_ids_val, list)
-                and len(top_k_ids_val) > 0
-                and isinstance(top_k_ids_val[0], torch.Tensor)
-            ):
-                log.info("Detected list of tensor predictions, concatenating...")
-                top_k_ids_list = torch.cat(top_k_ids_val)
-                user_ids_list = torch.cat(user_ids_val)
-            else:
-                log.error(f"Unexpected prediction value type: {type(top_k_ids_val)}")
-                return
-        else:
-            log.error(f"Expected dict but got: {type(first_pred)}")
-            return
-    else:
-        log.error(f"Unexpected predictions type or empty: {type(predictions)}")
-        return
-
-    # Validate that we successfully extracted the data
+    # Validation
     if top_k_ids_list is None or user_ids_list is None:
         log.error("Failed to extract top_k_ids and user_ids from predictions")
         return
@@ -183,15 +170,9 @@ def predict(cfg: DictConfig):
     log.info(f"Processing {len(user_ids_np)} predictions...")
 
     for i in range(len(user_ids_np)):
-        mapped_user_id = int(user_ids_np[i])
+        # user_ids_np contains original user IDs now
+        original_user_id = int(user_ids_np[i])
         mapped_item_ids = top_k_ids_np[i]
-
-        # Map back to original IDs
-        if mapped_user_id not in user_map_reverse:
-            log.warning(f"Mapped user ID {mapped_user_id} not found in reverse map.")
-            original_user_id = mapped_user_id  # Fallback
-        else:
-            original_user_id = user_map_reverse[mapped_user_id]
 
         original_item_ids = []
         for mid in mapped_item_ids:
@@ -201,8 +182,7 @@ def predict(cfg: DictConfig):
             else:
                 original_item_ids.append(mid)  # Fallback
 
-        # We need top 5. The model returns k=5 (set in predict_step) or self.k
-        # Ensure we have at least 5
+        # We need top 5.
         top_5 = original_item_ids[:5]
         while len(top_5) < 5:
             top_5.append(0)  # Padding if needed
